@@ -1,0 +1,20 @@
+# Credenciales
+.env
+
+# Logo personal
+midge_logo.png
+logo.png
+
+# Datos de trading (sensibles)
+Reports_PropReports/
+Reports_Gastos/
+Reports_Schwab/
+
+# Archivos generados
+trading_report.html
+tags.json
+__pycache__/
+*.pyc
+
+# Sistema
+.DS_Store

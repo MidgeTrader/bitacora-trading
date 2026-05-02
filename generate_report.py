@@ -1,0 +1,2821 @@
+import csv
+import collections
+import datetime
+import json
+import calendar
+import os
+import math
+import base64
+
+# Cargar .env si existe
+def _load_env():
+    env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+    if os.path.exists(env_path):
+        with open(env_path) as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith("#") and "=" in line:
+                    key, val = line.split("=", 1)
+                    os.environ.setdefault(key.strip(), val.strip())
+
+_load_env()
+
+# Directory Configuration (Now dynamic based on script location)
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+BASE_DIR = SCRIPT_DIR  # El script esta en la raiz del proyecto
+
+SCHWAB_DIR = os.path.join(BASE_DIR, 'Reports_Schwab')
+ALARIC_DIR = os.path.join(BASE_DIR, 'Reports_PropReports')
+GASTOS_DIR = os.path.join(BASE_DIR, 'Reports_Gastos')
+OUTPUT_FILE = os.path.join(BASE_DIR, 'trading_report.html')
+TAGS_FILE = os.path.join(BASE_DIR, 'tags.json')
+
+
+def load_tags():
+    """Carga asignaciones de tags desde tags.json. Devuelve Dict[str, str]."""
+    if os.path.exists(TAGS_FILE):
+        try:
+            with open(TAGS_FILE, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except Exception:
+            return {}
+    return {}
+
+
+def save_tags(tags_dict):
+    """Guarda tags a tags.json."""
+    with open(TAGS_FILE, 'w', encoding='utf-8') as f:
+        json.dump(tags_dict, f, indent=2, ensure_ascii=False)
+
+
+def parse_currency(value):
+    if not value or value.strip() == '':
+        return 0.0
+    clean_val = value.replace('$', '').replace(',', '')
+    try:
+        return float(clean_val)
+    except ValueError:
+        return 0.0
+
+def parse_date(date_str):
+    try:
+        return datetime.datetime.strptime(date_str, '%m/%d/%Y')
+    except ValueError:
+        return None
+
+def parse_alaric_opened(date_str, weekday_str=''):
+    # Prueba formatos DD/MM y MM/DD. Si hay weekday, lo usa para validar.
+    all_formats = [
+        '%m/%d/%y %H:%M:%S', '%m/%d/%y', # MM/DD/YY (PropReports)
+        '%d/%m/%y %H:%M:%S', '%d/%m/%y', # DD/MM/YY
+        '%m/%d/%Y %H:%M:%S', '%m/%d/%Y', # MM/DD/YYYY
+        '%d/%m/%Y %H:%M:%S', '%d/%m/%Y', # DD/MM/YYYY
+    ]
+    DIAS_SEMANA = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+    candidates = []
+    for fmt in all_formats:
+        try:
+            dt = datetime.datetime.strptime(date_str, fmt)
+            if dt not in candidates:
+                candidates.append(dt)
+        except ValueError:
+            continue
+    if not candidates:
+        return None
+    if weekday_str and len(candidates) > 1:
+        expected = weekday_str.strip()
+        for dt in candidates:
+            if DIAS_SEMANA[dt.weekday()] == expected:
+                return dt
+    # Sin weekday o sin coincidencia: DD/MM primero
+    return candidates[0]
+
+def parse_alaric_closed_candidates(date_str):
+    # Returns a list of valid datetime interpretations
+    candidates = []
+    formats = ['%m/%d/%y %H:%M:%S', '%m/%d/%y', '%d/%m/%y %H:%M:%S', '%d/%m/%y',
+               '%m/%d/%Y %H:%M:%S', '%m/%d/%Y', '%d/%m/%Y %H:%M:%S', '%d/%m/%Y']
+    seen = set()
+    
+    for fmt in formats:
+        try:
+            dt = datetime.datetime.strptime(date_str, fmt)
+            if dt not in seen:
+                candidates.append(dt)
+                seen.add(dt)
+        except ValueError:
+            continue
+    return candidates
+
+class Trade:
+    def __init__(self, date, symbol, quantity, price, action, fees):
+        self.date = date
+        self.symbol = symbol
+        self.quantity = abs(int(quantity)) 
+        self.price = price
+        self.action = action 
+        self.fees = fees
+
+    def __eq__(self, other):
+        if not isinstance(other, Trade): return False
+        return (self.date, self.symbol, self.quantity, self.price, self.action, self.fees) == \
+               (other.date, other.symbol, other.quantity, other.price, other.action, other.fees)
+
+    def __hash__(self):
+        return hash((self.date, self.symbol, self.quantity, self.price, self.action, self.fees))
+
+class ClosedTrade:
+    def __init__(self, symbol, open_date, close_date, quantity, entry_price, exit_price, entry_fees, exit_fees, direction, tag='', entry_tag='', exit_tag='', note=''):
+        self.symbol = symbol
+        self.open_date = open_date
+        self.close_date = close_date
+        self.quantity = quantity
+        self.entry_price = entry_price
+        self.exit_price = exit_price
+        self.entry_fees = entry_fees
+        self.exit_fees = exit_fees
+        self.direction = direction
+        self.tag = tag  # legacy, kept for backwards compat
+        self.entry_tag = entry_tag
+        self.exit_tag = exit_tag
+        self.note = note
+
+        cost_basis = (quantity * entry_price) 
+        proceeds = (quantity * exit_price)
+        
+        total_fees = entry_fees + exit_fees
+        
+        if direction == 'Long':
+            self.gross_pl = proceeds - cost_basis
+        else:
+            self.gross_pl = cost_basis - proceeds
+            
+        self.net_pl = self.gross_pl - total_fees
+        self.duration = (close_date - open_date).days
+        
+        if cost_basis > 0:
+            self.roi_pct = (self.net_pl / cost_basis) * 100
+        else:
+            self.roi_pct = 0.0
+
+    @property
+    def trade_id(self):
+        return f"{self.symbol}|{self.open_date.strftime('%Y-%m-%d %H:%M:%S')}|{self.entry_price}|{self.exit_price}|{self.quantity}"
+
+    def to_dict(self):
+        return {
+            'symbol': self.symbol,
+            'close_date': self.close_date.strftime('%Y-%m-%d'),
+            'type': self.direction,
+            'quantity': self.quantity,
+            'entry': self.entry_price,
+            'exit': self.exit_price,
+            'pl': self.net_pl,
+            'tag': self.entry_tag or self.tag,
+            'entry_tag': self.entry_tag,
+            'exit_tag': self.exit_tag,
+            'note': self.note,
+            'trade_id': self.trade_id
+        }
+
+    def __eq__(self, other):
+        if not isinstance(other, ClosedTrade): return False
+        return (self.symbol, self.open_date, self.close_date, self.quantity, self.entry_price, self.exit_price, self.entry_fees, self.exit_fees, self.direction, self.tag, self.entry_tag, self.exit_tag, self.note) == \
+               (other.symbol, other.open_date, other.close_date, other.quantity, other.entry_price, other.exit_price, other.entry_fees, other.exit_fees, other.direction, other.tag, other.entry_tag, other.exit_tag, other.note)
+
+    def __hash__(self):
+        return hash((self.symbol, self.open_date, self.close_date, self.quantity, self.entry_price, self.exit_price, self.entry_fees, self.exit_fees, self.direction, self.tag, self.entry_tag, self.exit_tag, self.note))
+
+def process_execution_trades(filepath):
+    trades = []
+    try:
+        with open(filepath, 'r', encoding='utf-8-sig') as f:
+            reader = csv.DictReader(f)
+            reader.fieldnames = [name.strip() for name in reader.fieldnames]
+            data_rows = list(reader)
+            data_rows.reverse()
+            
+            for row in data_rows:
+                if row.get('Description', '').startswith('SCHWAB'): continue
+                if row.get('Action') not in ['Buy', 'Sell', 'Buy to Cover', 'Sell Short']: continue
+
+                date = parse_date(row['Date'])
+                if not date: continue
+                
+                symbol = row['Symbol']
+                qty_str = row['Quantity'].replace(',', '')
+                qty = int(qty_str) if qty_str else 0
+                price = parse_currency(row['Price'])
+                fees = parse_currency(row.get('Fees & Comm', '0'))
+                
+                action = row['Action'].lower()
+                normalized_action = 'Buy'
+                if 'sell' in action: normalized_action = 'Sell'
+                elif 'buy' in action: normalized_action = 'Buy'
+                    
+                trades.append(Trade(date, symbol, qty, price, normalized_action, fees))
+                
+    except Exception as e:
+        print(f"Error reading CSV: {e}")
+        return []
+    return trades
+
+def process_alaric_trades(filepath):
+    trades = []
+    try:
+        with open(filepath, 'r', encoding='utf-8-sig') as f:
+            # Check for header
+            first_line = f.readline()
+            f.seek(0)
+            
+            has_header = 'Opened' in first_line and 'Symbol' in first_line
+            
+            if has_header:
+                reader = csv.DictReader(f)
+            else:
+                # Supply default headers if missing
+                fieldnames = ['Opened','Closed','Held','Account','Symbol','Type','CCY','Entry','Exit','Qty','Gross','Comm','Ecn Fee','SECTAF','NSCC','CL','ROR','FPT','FPF','EFT','TTC','ATNET','TAG','Weekday']
+                reader = csv.DictReader(f, fieldnames=fieldnames)
+                
+            # Normalize headers if needed, but assuming they are standard based on inspection
+            
+            for row in reader:
+                if not row.get('Symbol'): continue
+                
+                # Parse Dates
+                open_date = parse_alaric_opened(row.get('Opened', ''), row.get('Weekday', ''))
+                
+                # Smart Parse Closed Date
+                closed_raw = row.get('Closed', '').strip()
+                closed_candidates = parse_alaric_closed_candidates(closed_raw)
+                close_date = None
+
+                # PropReports exports Closed as HH:MM:SS when same day as Opened
+                if open_date and not closed_candidates and closed_raw:
+                    for time_fmt in ['%H:%M:%S', '%H:%M']:
+                        try:
+                            t = datetime.datetime.strptime(closed_raw, time_fmt).time()
+                            close_date = datetime.datetime.combine(open_date.date(), t)
+                            if close_date < open_date:
+                                close_date += datetime.timedelta(days=1)
+                            closed_candidates = [close_date]
+                            break
+                        except ValueError:
+                            continue
+
+                if open_date and closed_candidates:
+                    # Pick candidate closest to open_date
+                    # Filter candidates that are BEFORE open_date (impossible) unless same day/time roughly
+                    # Actually, just minimize abs(delta). Ideally close >= open.
+                    valid_candidates = [c for c in closed_candidates if c >= open_date - datetime.timedelta(seconds=1)]
+                    if not valid_candidates: 
+                        # If all are before open, usually data error, but take closest anyway
+                        valid_candidates = closed_candidates
+                        
+                    close_date = min(valid_candidates, key=lambda x: abs(x - open_date))
+                elif closed_candidates:
+                    close_date = closed_candidates[0] # Fallback if no open date
+
+                if not close_date: continue # Must have close date
+                if not open_date: open_date = close_date # Fallback
+                
+                symbol = row['Symbol']
+                
+                try:
+                    qty = abs(int(float(row.get('Qty', 0))))
+                except:
+                    qty = 0
+                    
+                try:
+                    entry = float(row.get('Entry', 0))
+                    exit_price = float(row.get('Exit', 0))
+                except:
+                    entry = 0.0
+                    exit_price = 0.0
+                
+                direction = row.get('Type', 'Long') # 'Long' or 'Short'
+                
+                # Fees Calculation
+                # Comm, Ecn Fee, SECTAF, NSCC, CL
+                def get_val(key):
+                    try: return float(row.get(key, 0))
+                    except: return 0.0
+                
+                fees = 0.0
+                fee_cols = ['Comm', 'Ecn Fee', 'SECTAF', 'NSCC', 'CL', 'ROR', 'FPT', 'FPF', 'EFT', 'TTC']
+                for col in fee_cols:
+                    fees += abs(get_val(col)) # Fees are often negative in this CSV, we want the magnitude
+                
+                tag = row.get('TAG', '').strip()
+                
+                # ClosedTrade __init__: symbol, open_date, close_date, quantity, entry_price, exit_price, entry_fees, exit_fees, direction, tag
+                # We put all fees in 'entry_fees' for simplicity as we don't have the split
+                
+                ct = ClosedTrade(symbol, open_date, close_date, qty, entry, exit_price, fees, 0.0, direction, tag)
+                trades.append(ct)
+                
+    except Exception as e:
+        print(f"Error reading Alaric CSV: {e}")
+        return []
+    
+    return trades
+
+def match_trades(trades):
+    trades = sorted(trades, key=lambda t: (t.date, t.symbol))
+    position_queues = collections.defaultdict(collections.deque)
+    closed_trades = []
+    
+    for t in trades:
+        if not position_queues[t.symbol]:
+            position_queues[t.symbol].append(t)
+            continue
+            
+        open_lot = position_queues[t.symbol][0]
+        is_closing = (open_lot.action != t.action)
+        
+        if not is_closing:
+            position_queues[t.symbol].append(t)
+        else:
+            qty_remaining_to_close = t.quantity
+            current_fees_per_share = t.fees / t.quantity if t.quantity > 0 else 0
+            
+            while qty_remaining_to_close > 0 and position_queues[t.symbol]:
+                lot = position_queues[t.symbol][0]
+                qty_matched = min(qty_remaining_to_close, lot.quantity)
+                
+                if not hasattr(lot, 'unit_fee'):
+                    lot.unit_fee = lot.fees / lot.quantity if lot.quantity > 0 else 0
+                
+                entry_fees = lot.unit_fee * qty_matched
+                exit_fees = current_fees_per_share * qty_matched
+                
+                direction = 'Long' if lot.action == 'Buy' else 'Short'
+                entry_price = lot.price
+                exit_price = t.price
+                
+                closed = ClosedTrade(t.symbol, lot.date, t.date, qty_matched, entry_price, exit_price, entry_fees, exit_fees, direction) # No tag for matched trades currently
+                closed_trades.append(closed)
+                
+                qty_remaining_to_close -= qty_matched
+                lot.quantity -= qty_matched
+                
+                if lot.quantity == 0:
+                    position_queues[t.symbol].popleft()
+            
+            if qty_remaining_to_close > 0:
+                remainder_fees = current_fees_per_share * qty_remaining_to_close
+                remainder_trade = Trade(t.date, t.symbol, qty_remaining_to_close, t.price, t.action, remainder_fees)
+                remainder_trade.unit_fee = current_fees_per_share
+                position_queues[t.symbol].append(remainder_trade)
+
+    return closed_trades
+
+def _is_date(value, fmt):
+    """Return True if value can be parsed with the given strptime format."""
+    try:
+        datetime.datetime.strptime(value, fmt)
+        return True
+    except ValueError:
+        return False
+
+
+
+def process_gastos(filepath):
+    # Returns a list of (date_str, category, comment, amount) tuples for detailed deduplication
+    expense_items = []
+    try:
+        with open(filepath, mode='r', encoding='utf-8-sig') as f:
+            # Detect if the file has a header row.
+            # Header rows start with a non-date string like "Date"; data rows start with a date like "04/01/2026".
+            first_line = f.readline().strip()
+            f.seek(0)
+
+            first_cell = first_line.split(',')[0].strip()
+            first_cell_is_date = any(
+                _is_date(first_cell, fmt)
+                for fmt in ('%m/%d/%Y', '%m/%d/%y', '%d/%m/%Y', '%d/%m/%y', '%Y-%m-%d')
+            )
+            has_header = not first_cell_is_date
+
+            if has_header:
+                reader = csv.DictReader(f)
+            else:
+                # No header: columns are Date, Category, Comment, Debit (4 columns)
+                reader = csv.DictReader(f, fieldnames=['Date', 'Category', 'Comment', 'Debit'])
+
+            for row in reader:
+                try:
+                    date_str = row['Date'].strip()
+                    if not date_str: continue
+                    
+                    dt = None
+                    for fmt in ('%m/%d/%Y', '%m/%d/%y', '%d/%m/%Y', '%d/%m/%y'):
+                        try:
+                            dt = datetime.datetime.strptime(date_str, fmt)
+                            break
+                        except ValueError:
+                            continue
+                    
+                    if not dt:
+                        print(f"  Warning: Could not parse date '{date_str}' in {filepath}")
+                        continue
+
+                    # Ensure we have a reasonable year (if 26 -> 2026)
+                    if dt.year < 100:
+                        dt = dt.replace(year=dt.year + 2000)
+                    elif dt.year < 1900: # Handle cases where %y might be parsed weirdly depending on system
+                        if dt.year < 70: dt = dt.replace(year=dt.year + 2000)
+                        else: dt = dt.replace(year=dt.year + 1900)
+
+                    key = dt.strftime('%Y-%m-%d')
+                    
+                    debit_str = row['Debit'].replace(',', '').strip()
+                    if not debit_str or float(debit_str) == 0: continue
+                    
+                    category = row.get('Category', '').strip()
+                    comment = row.get('Comment', '').strip()
+                    amount = float(debit_str)
+                    
+                    expense_items.append((key, category, comment, amount))
+                except (ValueError, KeyError):
+                    continue
+    except FileNotFoundError:
+        print(f"Warning: Expenses file {filepath} not found.")
+    return expense_items
+
+def generate_html_report(closed_trades, expenses_by_day):
+    # --- Aggregation Helper ---
+    def calculate_kpis(trade_list):
+        if not trade_list:
+            default_month = {'net_pl': 0.0, 'fees': 0.0, 'count': 0}
+            return {
+                'gross_pl': 0.0, 'net_pl': 0.0, 'fees': 0.0, 'expenses': 0.0,
+                'profit_factor': 0.0, 'win_rate': 0.0, 'total_trades': 0, 'long_count': 0, 'short_count': 0,
+                'monthly_breakdown': {i: default_month.copy() for i in range(1, 13)}
+            }
+        
+        net_pl_val = 0.0
+        total_fees = 0.0
+        wins = []
+        losses = []
+
+        # Monthly Accumulators
+        monthly_stats = {i: {'net_pl': 0.0, 'fees': 0.0, 'count': 0} for i in range(1, 13)}
+
+        for t in trade_list:
+            net_pl_val += t.net_pl
+            fees = t.entry_fees + t.exit_fees
+            total_fees += fees
+
+            if t.gross_pl > 0: wins.append(t)
+            else: losses.append(t)
+
+            
+            # Monthly Breakdown
+            m_idx = int(t.close_date.month)
+            monthly_stats[m_idx]['net_pl'] += t.net_pl
+            monthly_stats[m_idx]['fees'] += fees
+            monthly_stats[m_idx]['count'] += 1
+            
+        num_wins = len(wins)
+        total_t = len(trade_list)
+        
+        win_rate_val = (num_wins / total_t) * 100 if total_t > 0 else 0
+        gross_wins = sum(t.gross_pl for t in wins)
+        gross_losses = sum(t.gross_pl for t in losses)
+        profit_factor_val = abs(gross_wins / gross_losses) if losses and gross_losses != 0 else float('inf')
+        
+        gross_pl_val = net_pl_val + total_fees  # net = gross - fees
+        return {
+            'gross_pl': gross_pl_val,
+            'net_pl': net_pl_val,
+            'fees': total_fees,
+            'profit_factor': profit_factor_val,
+            'win_rate': win_rate_val,
+            'total_trades': total_t,
+            'long_count': sum(1 for t in trade_list if t.direction == 'Long'),
+            'short_count': sum(1 for t in trade_list if t.direction == 'Short'),
+            'monthly_breakdown': monthly_stats
+        }
+
+    def get_chart_data(trade_list):
+        sorted_trades = sorted(trade_list, key=lambda x: x.close_date)
+        cum_pl = 0
+        peak = -float('inf')
+        eq_dates, eq_vals, dd_vals = [], [], []
+        m_pl = collections.defaultdict(float)
+        
+        for t in sorted_trades:
+            cum_pl += t.net_pl
+            if cum_pl > peak:
+                peak = cum_pl
+            dd = cum_pl - peak
+            
+            eq_dates.append(t.close_date.strftime('%m/%y'))
+            eq_vals.append(round(cum_pl, 2))
+            dd_vals.append(round(dd, 2))
+            m_pl[t.close_date.strftime('%Y-%m')] += t.net_pl
+            
+        sorted_m = sorted(m_pl.keys())
+        return {
+            'equity': {'labels': eq_dates, 'data': eq_vals},
+            'drawdown': {'labels': eq_dates, 'data': dd_vals},
+            'monthly': {'labels': sorted_m, 'data': [round(m_pl[m], 2) for m in sorted_m]}
+        }
+
+    # Aggregation Helpers (Moved)
+    def calculate_gl_stats(trade_list):
+        if not trade_list: return {'total_pl': 0.0, 'avg_pl': 0.0, 'avg_pct': 0.0, 'count': 0}
+        total_pl = sum(t.gross_pl for t in trade_list)
+        count = len(trade_list)
+        avg_pl = total_pl / count
+        avg_pct = sum(t.roi_pct for t in trade_list) / count
+        return {'total_pl': total_pl, 'avg_pl': avg_pl, 'avg_pct': avg_pct, 'count': count}
+
+    def calculate_advanced_stats(trade_list):
+        if not trade_list:
+            return {
+                'expectancy': 0.0, 'max_dd': 0.0, 'max_dd_date': '-',
+                'max_consec_wins': 0, 'max_consec_wins_dates': '-',
+                'max_consec_losses': 0, 'max_consec_losses_dates': '-',
+                'win_loss_ratio': 0.0, 'gain_to_pain': 0.0
+            }
+        
+        # Expectancy
+        total_pl = sum(t.gross_pl for t in trade_list)
+        count = len(trade_list)
+        expectancy = total_pl / count if count > 0 else 0
+
+        # Win/Loss & Gain/Pain
+        wins = [t.gross_pl for t in trade_list if t.gross_pl > 0]
+        losses = [t.gross_pl for t in trade_list if t.gross_pl <= 0]
+        
+        avg_win = sum(wins) / len(wins) if wins else 0
+        avg_loss = sum(losses) / len(losses) if losses else 0
+        
+        sum_wins = sum(wins)
+        sum_losses = abs(sum(losses))
+        
+        win_loss_ratio = (avg_win / abs(avg_loss)) if avg_loss != 0 else float('inf')
+        gain_to_pain = sum_wins / sum_losses if sum_losses != 0 else float('inf')
+
+        # Advanced Performance Metrics
+        win_rate = len(wins) / count if count > 0 else 0
+        loss_rate = 1 - win_rate
+        edge_score = (win_rate * avg_win) + (loss_rate * avg_loss)
+        
+        # Kelly Criterion
+        payoff_ratio = (avg_win / abs(avg_loss)) if avg_loss != 0 else 0
+        kelly = (win_rate - (1 - win_rate) / payoff_ratio) if payoff_ratio > 0 else 0
+        
+        # Std Dev and SQN (based on gross P&L)
+        pl_values = [t.gross_pl for t in trade_list]
+        mean_pl = sum(pl_values) / count if count > 0 else 0
+        if count > 1:
+            variance = sum((x - mean_pl) ** 2 for x in pl_values) / (count - 1)
+            std_dev = math.sqrt(variance)
+        else:
+            std_dev = 0
+
+        sqn = (mean_pl / std_dev) * math.sqrt(count) if std_dev > 0 else 0
+        sharpe = (mean_pl / std_dev) if std_dev > 0 else 0 # Simplified Sharpe
+
+        # Sortino Ratio (Downside Deviation)
+        downside_returns = [min(0, t.gross_pl) for t in trade_list]
+        if count > 1:
+            downside_variance = sum(x**2 for x in downside_returns) / count
+            downside_std_dev = math.sqrt(downside_variance)
+        else:
+            downside_std_dev = 0
+        sortino = (mean_pl / downside_std_dev) if downside_std_dev > 0 else 0
+
+        # Drawdown & Streaks
+        sorted_trades = sorted(trade_list, key=lambda x: x.close_date)
+        
+        # Max Drawdown
+        peak = -float('inf')
+        current_cum = 0
+        max_dd = 0
+        max_dd_date = '-'
+        peak_date = None
+        max_dd_duration = 0 # Days
+        
+        # Streaks
+        current_streak_type = 0 # 1 win, -1 loss
+        current_streak_count = 0
+        current_streak_start = None
+        
+        max_mod_wins = 0
+        max_wins_date = '-'
+        
+        max_mod_losses = 0
+        max_losses_date = '-'
+        
+        # Time Analysis
+        win_durations = [t.duration for t in trade_list if t.gross_pl > 0]
+        loss_durations = [t.duration for t in trade_list if t.gross_pl <= 0]
+        avg_time_win = sum(win_durations) / len(win_durations) if win_durations else 0
+        avg_time_loss = sum(loss_durations) / len(loss_durations) if loss_durations else 0
+        
+        # Long vs Short
+        longs = [t for t in trade_list if t.direction == 'Long']
+        shorts = [t for t in trade_list if t.direction == 'Short']
+        
+        def get_pf(trades):
+            w = sum(t.gross_pl for t in trades if t.gross_pl > 0)
+            l = abs(sum(t.gross_pl for t in trades if t.gross_pl <= 0))
+            return w / l if l > 0 else (float('inf') if w > 0 else 0)
+
+        pf_long = get_pf(longs)
+        pf_short = get_pf(shorts)
+        wr_long = (sum(1 for t in longs if t.gross_pl > 0) / len(longs) * 100) if longs else 0
+        wr_short = (sum(1 for t in shorts if t.gross_pl > 0) / len(shorts) * 100) if shorts else 0
+
+        for i, t in enumerate(sorted_trades):
+            # DD
+            current_cum += t.gross_pl
+            if current_cum > peak:
+                peak = current_cum
+                peak_date = t.close_date
+
+            dd = current_cum - peak
+            if dd < max_dd:
+                max_dd = dd
+                max_dd_date = t.close_date.strftime('%Y-%m-%d')
+                if peak_date:
+                    duration = (t.close_date - peak_date).days
+                    if duration > max_dd_duration:
+                        max_dd_duration = duration
+
+            # Streaks
+            is_win = t.gross_pl > 0
+            type_val = 1 if is_win else -1
+            
+            if type_val == current_streak_type:
+                current_streak_count += 1
+            else:
+                # End of streak, check max
+                if current_streak_type != 0:
+                    end_str = sorted_trades[i-1].close_date.strftime('%m/%d')
+                    start_str = current_streak_start.strftime('%m/%d')
+                    date_range = f"{start_str}-{end_str}"
+                    
+                    if current_streak_type == 1:
+                        if current_streak_count > max_mod_wins:
+                            max_mod_wins = current_streak_count
+                            max_wins_date = date_range
+                    elif current_streak_type == -1:
+                        if current_streak_count > max_mod_losses:
+                            max_mod_losses = current_streak_count
+                            max_losses_date = date_range
+                
+                current_streak_type = type_val
+                current_streak_count = 1
+                current_streak_start = t.close_date
+        
+        # Final streak check
+        if current_streak_count > 0:
+            end_str = sorted_trades[-1].close_date.strftime('%m/%d')
+            start_str = current_streak_start.strftime('%m/%d')
+            date_range = f"{start_str}-{end_str}"
+            if current_streak_type == 1:
+                if current_streak_count > max_mod_wins:
+                    max_mod_wins = current_streak_count
+                    max_wins_date = date_range
+            elif current_streak_type == -1:
+                if current_streak_count > max_mod_losses:
+                    max_mod_losses = current_streak_count
+                    max_losses_date = date_range
+
+        recovery_factor = total_pl / abs(max_dd) if max_dd != 0 else (float('inf') if total_pl > 0 else 0)
+        
+        # Calmar Ratio (Simplified: NetPL / MaxDD)
+        calmar = recovery_factor # Usually annualized, but here we use total period
+        
+        # Z-Score (Streaks)
+        # WWLLW -> streaks: WW, LL, W -> 3 streaks
+        streaks_count = 0
+        if sorted_trades:
+            streaks_count = 1
+            for i in range(1, len(sorted_trades)):
+                if (sorted_trades[i].net_pl > 0) != (sorted_trades[i-1].net_pl > 0):
+                    streaks_count += 1
+        
+        n_wins = len(wins)
+        if count > 1:
+            z_score = (count * (streaks_count - 0.5) - 2 * n_wins * (count - n_wins)) / \
+                      ( (2 * n_wins * (count - n_wins) * (2 * n_wins * (count - n_wins) - count)) / (count - 1) )**0.5 \
+                      if (2 * n_wins * (count - n_wins) * (2 * n_wins * (count - n_wins) - count)) > 0 else 0
+        else:
+            z_score = 0
+            
+        # Standard Error & T-Score
+        standard_error = std_dev / math.sqrt(count) if count > 0 else 0
+        t_score = mean_pl / standard_error if standard_error > 0 else 0
+        
+        # Trades per Day
+        unique_days = set(t.close_date.date() for t in trade_list)
+        trades_per_day = count / len(unique_days) if unique_days else 0
+
+        # Consistency Ratio (Sharpe-like but often defined as Mean/StdDev)
+        consistency_ratio = sharpe # In this context, they are often used interchangeably
+
+        return {
+            'expectancy': expectancy,
+            'max_dd': max_dd,
+            'max_dd_date': max_dd_date,
+            'max_dd_duration': max_dd_duration,
+            'recovery_factor': recovery_factor,
+            'calmar': calmar,
+            'z_score': z_score,
+            'equity_peak': peak,
+            'trades_per_day': trades_per_day,
+            'standard_error': standard_error,
+            't_score': t_score,
+            'edge_score': edge_score,
+            'payoff_ratio': payoff_ratio,
+            'sqn': sqn,
+            'sharpe': sharpe,
+            'sortino': sortino,
+            'consistency_ratio': consistency_ratio,
+            'kelly': kelly * 100,
+            'std_dev': std_dev,
+            'avg_time_win': avg_time_win,
+            'pf_long': pf_long,
+            'pf_short': pf_short,
+            'wr_long': wr_long,
+            'wr_short': wr_short,
+            'max_consec_wins': max_mod_wins,
+            'max_consec_wins_dates': max_wins_date,
+            'max_consec_losses': max_mod_losses,
+            'max_consec_losses_dates': max_losses_date,
+            'win_loss_ratio': win_loss_ratio,
+            'gain_to_pain': gain_to_pain,
+            'avg_win': avg_win,
+            'avg_loss': avg_loss
+        }
+
+    # --- Annual Data Aggregation ---
+    trades_by_year = collections.defaultdict(list)
+    for t in closed_trades:
+        trades_by_year[t.close_date.strftime('%Y')].append(t)
+        
+    # --- Annual Data Aggregation ---
+    trades_by_year = collections.defaultdict(list)
+    for t in closed_trades:
+        trades_by_year[t.close_date.strftime('%Y')].append(t)
+
+    years = sorted(trades_by_year.keys())
+
+    # Sum expenses by year
+    expenses_by_year = collections.defaultdict(float)
+    for date_str, cost in expenses_by_day.items():
+        year = date_str[:4]
+        expenses_by_year[year] += cost
+
+    # Global Stats & Charts
+    annual_stats = {}
+    annual_charts = {}
+
+    # "All"
+    all_stats = calculate_kpis(closed_trades)
+    all_stats['expenses'] = sum(expenses_by_year.values())
+    annual_stats['All'] = all_stats
+    annual_charts['All'] = get_chart_data(closed_trades)
+
+    # Years
+    for y in years:
+        year_stats = calculate_kpis(trades_by_year[y])
+        year_stats['expenses'] = expenses_by_year.get(y, 0.0)
+        annual_stats[y] = year_stats
+        annual_charts[y] = get_chart_data(trades_by_year[y])
+
+    # JSON Serialization
+    annual_stats_json = json.dumps(annual_stats)
+    annual_charts_json = json.dumps(annual_charts)
+    available_years_json = json.dumps(['All'] + years)
+
+    # Tags data for interactive editor (trade_id -> {entry_tag, exit_tag, note})
+    all_tags_data = {}
+    for t in closed_trades:
+        if t.entry_tag or t.exit_tag or t.note:
+            all_tags_data[t.trade_id] = {
+                'entry_tag': t.entry_tag,
+                'exit_tag': t.exit_tag,
+                'note': t.note
+            }
+    daily_tags_json = json.dumps(all_tags_data)
+
+    # --- Daily Data Aggregation ---
+    trades_by_day = collections.defaultdict(list)
+    for t in closed_trades:
+        trades_by_day[t.close_date.strftime('%Y-%m-%d')].append(t)
+
+    daily_stats = {}
+    for d_key, trades in trades_by_day.items():
+        wins = [t for t in trades if t.net_pl > 0]
+        losses = [t for t in trades if t.net_pl <= 0]
+        total_fees = sum(t.entry_fees + t.exit_fees for t in trades)
+        
+        stats_all = calculate_gl_stats(trades)
+        stats_won = calculate_gl_stats(wins)
+        stats_lost = calculate_gl_stats(losses)
+        stats_adv = calculate_advanced_stats(trades)
+        
+        daily_stats[d_key] = {
+            'pnl': sum(t.net_pl for t in trades),
+            'count': len(trades),
+            'fees': total_fees,
+            'trades': [t.to_dict() for t in trades],
+            'stats': {
+                'all': stats_all,
+                'won': stats_won,
+                'lost': stats_lost,
+                'advanced': stats_adv
+            }
+
+        }
+    
+    # Merge Expenses into Daily Stats
+    for d_key, cost in expenses_by_day.items():
+        if d_key not in daily_stats:
+            daily_stats[d_key] = {
+                'pnl': 0.0, 'count': 0, 'fees': 0.0, 'trades': [],
+                'stats': {'all': {}, 'won': {}, 'lost': {}, 'advanced': {}} # Empty stats
+            }
+        
+        daily_stats[d_key]['fees'] += cost
+        # Excluded from P&L per user request to avoid distorting charts
+        # daily_stats[d_key]['pnl'] -= cost 
+
+    # Monthly/Daily Context (Equity Curves etc)
+    monthly_pl = collections.defaultdict(float)
+    monthly_equity_curves = collections.defaultdict(lambda: {'labels': [], 'data': []})
+    daily_equity_curves = collections.defaultdict(lambda: {'labels': [], 'data': []})
+    
+    current_month_pl = collections.defaultdict(float)
+    current_day_pl = collections.defaultdict(float)
+    
+    # Needs chronological for equity curves
+    closed_trades.sort(key=lambda x: x.close_date) 
+    
+    for t in closed_trades:
+        m_key = t.close_date.strftime('%Y-%m')
+        d_key = t.close_date.strftime('%Y-%m-%d')
+        
+        monthly_pl[m_key] += t.net_pl
+        
+        current_month_pl[m_key] += t.net_pl
+        monthly_equity_curves[m_key]['labels'].append(t.close_date.strftime('%d/%b'))
+        monthly_equity_curves[m_key]['data'].append(round(current_month_pl[m_key], 2))
+        
+        current_day_pl[d_key] += t.net_pl
+        daily_equity_curves[d_key]['labels'].append('')
+        daily_equity_curves[d_key]['data'].append(round(current_day_pl[d_key], 2))
+
+    # Incorporate expenses into Monthly PL and Monthly Equity
+    # Note: Equity curves above were built trade-by-trade. Expenses are day-level. 
+    # Ideally, we sort expenses and trades together. 
+    # Quick fix: Adjust monthly_pl sums. (Equity curves might slightly mismatch intraday if cost was 'at start', but acceptable).
+    # Excluded from P&L per user request to avoid distorting charts
+    # for d_key, cost in expenses_by_day.items():
+    #     m_key = d_key[:7] # YYYY-MM
+    #     monthly_pl[m_key] -= cost
+
+    monthly_equity_json = json.dumps(monthly_equity_curves)
+    daily_equity_json = json.dumps(daily_equity_curves)
+    daily_data_json = json.dumps(daily_stats)
+    monthly_data_json = json.dumps(monthly_pl)
+    
+    # Monthly Symbols & Context Stats
+    monthly_symbols = collections.defaultdict(lambda: collections.defaultdict(lambda: {'pnl': 0.0, 'count': 0}))
+    for t in closed_trades:
+        m_key = t.close_date.strftime('%Y-%m')
+        monthly_symbols[m_key][t.symbol]['pnl'] += t.net_pl
+        monthly_symbols[m_key][t.symbol]['count'] += 1
+        
+    monthly_symbols_list = {}
+    for m_key, sym_dict in monthly_symbols.items():
+        s_list = [{'symbol': s, 'pnl': d['pnl'], 'count': d['count']} for s, d in sym_dict.items()]
+        s_list.sort(key=lambda x: x['pnl'], reverse=True)
+        monthly_symbols_list[m_key] = s_list
+    monthly_symbols_json = json.dumps(monthly_symbols_list)
+    
+    monthly_context_stats = {}
+    monthly_gain_loss_stats = {}
+
+    def calculate_tag_metrics(trade_list):
+        tag_dict = collections.defaultdict(list)
+        for t in trade_list:
+            t_tag = (t.entry_tag or t.tag).strip() if hasattr(t, 'entry_tag') else ''
+            if not t_tag:
+                tag_dict['Untagged'].append(t)
+            else:
+                # Split comma-separated tags
+                for single_tag in t_tag.split(','):
+                    single_tag = single_tag.strip()
+                    if single_tag:
+                        tag_dict[single_tag].append(t)
+
+        results = []
+        for tag, trades in tag_dict.items():
+            count = len(trades)
+            wins = [t for t in trades if t.net_pl > 0]
+            win_rate = (len(wins) / count * 100) if count > 0 else 0
+            total_pl = sum(t.net_pl for t in trades)
+            avg_pl = total_pl / count if count > 0 else 0
+            # Include individual trades for expandable view
+            trade_list_data = []
+            for t in trades:
+                trade_list_data.append({
+                    'symbol': t.symbol,
+                    'dir': t.direction,
+                    'entry': round(t.entry_price, 4),
+                    'exit': round(t.exit_price, 4),
+                    'qty': t.quantity,
+                    'pl': round(t.net_pl, 2),
+                    'date': t.close_date.strftime('%Y-%m-%d'),
+                    'exit_tag': t.exit_tag if hasattr(t, 'exit_tag') else '',
+                    'note': t.note if hasattr(t, 'note') else ''
+                })
+            # Sort trades by date
+            trade_list_data.sort(key=lambda x: x['date'])
+            results.append({
+                'tag': tag,
+                'count': count,
+                'win_rate': win_rate,
+                'avg_pl': avg_pl,
+                'trades': trade_list_data
+            })
+        results.sort(key=lambda x: x['count'], reverse=True)
+        return results
+
+    def calculate_weekday_metrics(trade_list):
+        weekday_dict = collections.defaultdict(list)
+        # 0=Monday, 6=Sunday
+        for t in trade_list:
+            wd = t.close_date.weekday()
+            weekday_dict[wd].append(t)
+        
+        results = []
+        # Days names mapping
+        days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+        
+        for wd, trades in weekday_dict.items():
+            count = len(trades)
+            wins = [t for t in trades if t.net_pl > 0]
+            win_rate = (len(wins) / count * 100) if count > 0 else 0
+            total_pl = sum(t.net_pl for t in trades)
+            avg_pl = total_pl / count if count > 0 else 0
+            
+            results.append({
+                'day_name': days[wd],
+                'day_index': wd,
+                'count': count,
+                'win_rate': win_rate,
+                'total_pl': total_pl,
+                'avg_pl': avg_pl
+            })
+            
+        # Sort by day index (Monday first)
+        results.sort(key=lambda x: x['day_index'])
+        return results
+
+    for m_key in monthly_symbols.keys():
+        m_trades = [t for t in closed_trades if t.close_date.strftime('%Y-%m') == m_key]
+        
+        # Context Stats
+        stats = calculate_kpis(m_trades)
+        monthly_context_stats[m_key] = {
+            'win_rate': stats['win_rate'],
+            'profit_factor': stats['profit_factor'],
+            'total_trades': stats['total_trades'],
+            'long_count': stats['long_count'],
+            'short_count': stats['short_count'],
+            'fees': stats['fees'],
+            'avg_win': 0, 'avg_loss': 0 
+        }
+
+        # Gain Loss Stats
+        gl_stats = calculate_gl_stats(m_trades)
+        
+        # Expenses
+        m_cost = 0.0
+        for date_str, cost in expenses_by_day.items():
+            if date_str.startswith(m_key):
+                m_cost += cost
+        
+        # Excluded from PL stats below to avoid distortion
+        # gl_stats['total_pl'] -= m_cost
+        # if gl_stats['count'] > 0:
+        #     gl_stats['avg_pl'] = gl_stats['total_pl'] / gl_stats['count']
+
+        unique_days = set(t.close_date.date() for t in m_trades)
+        traded_days_count = len(unique_days)
+        # Avg Daily P&L now reflects only trading P&L
+        avg_daily_pl = gl_stats['total_pl'] / traded_days_count if traded_days_count > 0 else 0.0
+
+        m_wins_sub = [t for t in m_trades if t.net_pl > 0]
+        m_losses_sub = [t for t in m_trades if t.net_pl <= 0]
+        
+        monthly_gain_loss_stats[m_key] = {
+            'all': gl_stats,
+            'won': calculate_gl_stats(m_wins_sub),
+            'lost': calculate_gl_stats(m_losses_sub),
+            'advanced': calculate_advanced_stats(m_trades),
+            'tags': calculate_tag_metrics(m_trades),
+            'weekdays': calculate_weekday_metrics(m_trades),
+            'expenses': m_cost,
+            'traded_days': traded_days_count,
+            'avg_daily_pl': avg_daily_pl
+        }
+
+    monthly_stats_json = json.dumps(monthly_context_stats)
+    monthly_gain_loss_json = json.dumps(monthly_gain_loss_stats)
+
+    print(f"DEBUG: Annual Stats Keys: {annual_stats.keys()}")
+    if 'All' in annual_stats:
+        print(f"DEBUG: All Net PL: {annual_stats['All']['net_pl']}")
+
+    # Embed logo as base64
+    logo_b64 = ""
+    logo_path = os.environ.get("LOGO_PATH", os.path.join(os.path.dirname(__file__), "logo.png"))
+    try:
+        with open(logo_path, "rb") as lf:
+            logo_b64 = base64.b64encode(lf.read()).decode()
+    except FileNotFoundError:
+        pass
+
+    # --- HTML Generator ---
+
+    html = f"""
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{os.environ.get('TRADER_NAME', 'Trading Report')}</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;500;600;700&family=Rajdhani:wght@300;400;500;600;700&family=Space+Mono:ital,wght@0,400;0,700;1,400;1,700&display=swap" rel="stylesheet">
+    <style>
+        :root {{
+            --bg-color: #030712;
+            --card-bg: rgba(3, 7, 18, 0.7);
+            --text-primary: #e2e8f0;
+            --text-secondary: #94a3b8;
+            --accent-primary: #00d4ff; 
+            --accent-primary-dim: rgba(0, 212, 255, 0.15);
+            --accent-green: #39ff14; 
+            --accent-red: #ff003c; 
+            --accent-blue: #00d4ff;
+            --border-color: rgba(0, 212, 255, 0.3);
+            --border-glow: 0 0 10px rgba(0, 212, 255, 0.2), inset 0 0 10px rgba(0, 212, 255, 0.1);
+            --hover-bg: rgba(0, 212, 255, 0.1);
+        }}
+        
+        /* Layout & HUD Background */
+        body {{ 
+            display: flex; overflow: hidden; height: 100vh; margin: 0; 
+            font-family: 'Rajdhani', sans-serif; 
+            background-color: var(--bg-color); 
+            color: var(--text-primary);
+            transition: background-color 0.3s ease;
+        }}
+        
+        /* Circuit Background Canvas */
+        #circuit-bg {{
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 0;
+            pointer-events: none;
+            transition: opacity 0.3s;
+        }}
+        
+        h1, h2, h3, .card-title {{
+            font-family: 'Orbitron', sans-serif;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+        }}
+
+        .sidebar {{
+            width: 260px;
+            background-color: rgba(3, 7, 18, 0.85);
+            backdrop-filter: blur(12px);
+            border-right: 1px solid var(--border-color);
+            box-shadow: 2px 0 15px rgba(0, 212, 255, 0.1);
+            display: flex; flex-direction: column;
+            padding: 1.5rem;
+            flex-shrink: 0;
+            z-index: 10;
+        }}
+        .main-content {{
+            flex-grow: 1;
+            padding: 2rem;
+            overflow-y: auto;
+            position: relative;
+        }}
+        
+        /* Custom Scrollbar */
+        ::-webkit-scrollbar {{ width: 6px; height: 6px; }}
+        ::-webkit-scrollbar-track {{ background: rgba(0,0,0,0.2); }}
+        ::-webkit-scrollbar-thumb {{ background: var(--border-color); border-radius: 3px; }}
+        ::-webkit-scrollbar-thumb:hover {{ background: var(--accent-primary); }}
+
+        .nav-btn {{
+            background: transparent;
+            border: 1px solid transparent;
+            border-left: 3px solid transparent;
+            color: var(--text-secondary);
+            text-align: left;
+            padding: 0.8rem 1rem;
+            border-radius: 0;
+            cursor: pointer;
+            font-size: 1rem;
+            font-family: 'Orbitron', sans-serif;
+            font-weight: 500;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            margin-bottom: 0.5rem;
+            transition: all 0.3s ease;
+            position: relative;
+            overflow: hidden;
+        }}
+        .nav-btn::before {{
+            content: ''; position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            background: linear-gradient(90deg, var(--accent-primary-dim), transparent);
+            transform: translateX(-100%); transition: transform 0.3s ease; z-index: -1;
+        }}
+        .nav-btn:hover::before {{ transform: translateX(0); }}
+        .nav-btn:hover {{ color: var(--accent-primary); border-left-color: var(--accent-primary); text-shadow: 0 0 8px var(--accent-primary); }}
+        .nav-btn.active {{ 
+            background: var(--accent-primary-dim); 
+            color: var(--accent-primary); 
+            border-left: 3px solid var(--accent-primary);
+            text-shadow: 0 0 8px var(--accent-primary);
+            box-shadow: inset 10px 0 20px -10px var(--accent-primary);
+        }}
+        
+        .view-section {{ display: none; animation: hudFadeIn 0.4s ease-out forwards; opacity: 0; transform: scale(0.98); }}
+        .view-section.active {{ display: block; }}
+        @keyframes fadeOut {{ 0% {{ opacity:1; }} 80% {{ opacity:1; }} 100% {{ opacity:0; }} }}
+        @keyframes hudFadeIn {{
+            0% {{ opacity: 0; transform: scale(0.98) translateY(10px); filter: blur(4px); }} 
+            100% {{ opacity: 1; transform: scale(1) translateY(0); filter: blur(0); }} 
+        }}
+
+        /* HUD Components */
+        .grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 1.5rem; margin-bottom: 2rem; }}
+        
+        .card {{ 
+            background-color: var(--card-bg); 
+            backdrop-filter: blur(10px);
+            border-radius: 4px; 
+            padding: 1.5rem; 
+            border: 1px solid var(--border-color); 
+            box-shadow: var(--border-glow);
+            position: relative;
+            overflow: hidden;
+        }}
+        /* HUD Corner Accents */
+        .card::before, .card::after {{
+            content: ''; position: absolute; width: 10px; height: 10px; border: 2px solid var(--accent-primary); transition: all 0.3s;
+        }}
+        .card::before {{ top: -1px; left: -1px; border-right: none; border-bottom: none; }}
+        .card::after {{ bottom: -1px; right: -1px; border-left: none; border-top: none; }}
+        .card:hover::before, .card:hover::after {{ width: 20px; height: 20px; box-shadow: 0 0 10px var(--accent-primary); }}
+
+        /* Laser scan bar effect on hover */
+        .laser-bar {{
+            position: absolute;
+            left: 0;
+            right: 0;
+            height: 2px;
+            background: linear-gradient(90deg, transparent, var(--accent-primary), transparent);
+            box-shadow: 0 0 8px var(--accent-primary), 0 0 20px rgba(0, 212, 255, 0.4);
+            top: 0;
+            animation: laserBarDown 0.6s ease-in-out forwards;
+            pointer-events: none;
+            z-index: 5;
+        }}
+        @keyframes laserBarDown {{
+            0% {{ top: 0; opacity: 0; }}
+            5% {{ opacity: 1; }}
+            85% {{ opacity: 1; }}
+            100% {{ top: 100%; opacity: 0; }}
+        }}
+
+        .card-title {{ 
+            color: var(--accent-primary); 
+            font-size: 0.7rem; 
+            margin-bottom: 0.75rem; 
+            text-shadow: 0 0 5px rgba(0, 212, 255, 0.5);
+        }}
+        .card-value {{ 
+            font-family: 'Space Mono', monospace;
+            font-size: 1.75rem; 
+            font-weight: 700; 
+            color: #fff;
+            text-shadow: 0 0 10px rgba(255,255,255,0.3);
+        }}
+        .positive {{ color: var(--accent-green) !important; text-shadow: 0 0 10px rgba(57, 255, 20, 0.4) !important; }}
+        .negative {{ color: var(--accent-red) !important; text-shadow: 0 0 10px rgba(255, 0, 60, 0.4) !important; }}
+        
+        .charts-section {{ display: grid; grid-template-columns: 2fr 1fr; gap: 1.5rem; margin-bottom: 2rem; }}
+        .chart-container {{ position: relative; height: 350px; width: 100%; }}
+        
+        table {{ width: 100%; border-collapse: separate; border-spacing: 0; font-size: 0.9rem; }}
+        th, td {{ padding: 0.85rem; border-bottom: 1px solid rgba(0, 212, 255, 0.15); }}
+        th {{ 
+            color: var(--accent-primary); 
+            font-family: 'Orbitron', sans-serif;
+            font-size: 0.7rem;
+            letter-spacing: 0.1em;
+            text-transform: uppercase; 
+            background: rgba(0, 212, 255, 0.05);
+        }}
+        tr:hover td {{ background-color: rgba(0, 212, 255, 0.05); }}
+        
+        /* Annual Grid */
+        .annual-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 1.5rem; }}
+        .month-card {{ 
+            background-color: var(--card-bg); 
+            border: 1px solid var(--border-color); 
+            border-radius: 4px; 
+            padding: 1.5rem; 
+            cursor: pointer; 
+            transition: all 0.2s; 
+            box-shadow: var(--border-glow);
+            position: relative;
+            overflow: hidden;
+        }}
+        .month-card:hover {{ 
+            transform: translateY(-2px); 
+            border-color: var(--accent-primary);
+            box-shadow: 0 0 20px rgba(0, 212, 255, 0.3), inset 0 0 15px rgba(0, 212, 255, 0.1);
+        }}
+        /* Scanline effect on hover */
+        .month-card::after {{
+            content: ''; position: absolute; top: -100%; left: 0; width: 100%; height: 50%;
+            background: linear-gradient(to bottom, transparent, rgba(0, 212, 255, 0.2), transparent);
+            transition: 0s;
+        }}
+        .month-card:hover::after {{ animation: scanline 1.5s linear infinite; }}
+        @keyframes scanline {{ 0% {{ top: -50%; }} 100% {{ top: 150%; }} }}
+
+        /* Calendar */
+        .calendar-header {{ display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; }}
+        .calendar-nav-btn {{ 
+            background: transparent; 
+            border: 1px solid var(--accent-primary); 
+            color: var(--accent-primary); 
+            padding: 0.4rem 1.2rem; 
+            cursor: pointer; 
+            border-radius: 2px;
+            font-family: 'Orbitron', sans-serif;
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            box-shadow: 0 0 8px rgba(0, 212, 255, 0.2);
+            transition: all 0.2s;
+        }}
+        .calendar-nav-btn:hover {{ 
+            background: var(--accent-primary); 
+            color: #000;
+            box-shadow: 0 0 15px var(--accent-primary);
+        }}
+        .calendar-grid {{ display: grid; grid-template-columns: repeat(6, 1fr); gap: 0.5rem; }}
+        .day-name {{ text-align: center; color: var(--accent-primary); font-family: 'Orbitron', sans-serif; font-size: 0.7rem; padding: 0.5rem; letter-spacing: 0.1em; text-transform: uppercase; }}
+        .day-cell {{ 
+            background-color: rgba(15, 23, 42, 0.6); 
+            border-radius: 2px; 
+            min-height: 55px; 
+            padding: 0.5rem; 
+            display: flex; flex-direction: column; justify-content: space-between; 
+            cursor: pointer; 
+            border: 1px solid rgba(0, 212, 255, 0.1); 
+            transition: all 0.2s;
+        }}
+        .day-cell:hover {{ border-color: var(--accent-primary); box-shadow: 0 0 10px rgba(0, 212, 255, 0.3); transform: scale(1.02); z-index: 2; }}
+        .day-cell.empty {{ background: transparent; border: 1px dashed rgba(0, 212, 255, 0.1); cursor: default; }}
+        .day-cell.empty:hover {{ transform: none; box-shadow: none; border-color: rgba(0, 212, 255, 0.1); }}
+        .day-number {{ font-family: 'Space Mono', monospace; font-size: 0.75rem; color: var(--text-secondary); margin-bottom: 0.25rem; }}
+        .day-pnl {{ font-family: 'Space Mono', monospace; font-size: 0.95rem; font-weight: 700; text-align: right; }}
+        .day-trades {{ font-size: 0.65rem; color: var(--text-secondary); text-align: right; text-transform: uppercase; }}
+        .week-total {{ 
+            display: flex; flex-direction: column; justify-content: center; 
+            background-color: rgba(0, 212, 255, 0.05); 
+            border-radius: 2px; padding: 0.5rem; text-align: right; 
+            border: 1px solid var(--border-color); 
+        }}
+        .week-label {{ font-family: 'Orbitron', sans-serif; font-size: 0.65rem; color: var(--accent-primary); text-transform: uppercase; margin-bottom: 0.25rem; letter-spacing: 0.05em; }}
+        .bg-green {{ background-color: rgba(57, 255, 20, 0.05); border-color: rgba(57, 255, 20, 0.3); }}
+        .bg-green:hover {{ box-shadow: 0 0 15px rgba(57, 255, 20, 0.2); border-color: var(--accent-green); }}
+        .bg-red {{ background-color: rgba(255, 0, 60, 0.05); border-color: rgba(255, 0, 60, 0.3); }}
+        .bg-red:hover {{ box-shadow: 0 0 15px rgba(255, 0, 60, 0.2); border-color: var(--accent-red); }}
+    </style>
+</head>
+<body>
+    <canvas id="circuit-bg"></canvas>
+    <aside class="sidebar" style="position: relative; z-index: 10;">
+        <div style="margin-bottom: 2rem; text-align: center;">
+            <img src="data:image/png;base64,{logo_b64}" style="width: 150px; height: 150px; object-fit: cover; border-radius: 50%; border: 2px solid var(--accent-primary); box-shadow: 0 0 15px var(--accent-primary); margin-bottom: 1rem;">
+            <h2 style="margin:0; font-size:1.8rem; text-transform: none; background: linear-gradient(to right, #60a5fa, #a855f7); -webkit-background-clip: text; -webkit-text-fill-color: transparent; filter: drop-shadow(5px 5px 0px rgba(255, 255, 255, 0.15));">{os.environ.get('TRADER_NAME', 'Trading Report')}</h2>
+            <p style="font-size: 1.2rem; color: #40E0D0; font-weight: 600;">Performance</p>
+        </div>
+        <button class="nav-btn active" onclick="switchView('annual')" id="btn-annual">Annual Board</button>
+        <button class="nav-btn" onclick="switchView('monthly')" id="btn-monthly">Calendar</button>
+        <button class="nav-btn" onclick="switchView('daily')" id="btn-daily">Daily details</button>
+        <button class="nav-btn" onclick="switchView('ratios')" id="btn-ratios">Metricas</button>
+    </aside>
+
+    <main class="main-content" style="position: relative; z-index: 10;">
+        <!-- CUSTOMIZATION TRIGGER -->
+        <button id="customizationTrigger" onclick="toggleCustomizer()" style="position: absolute; top: 1.5rem; right: 2rem; background: var(--card-bg); border: 1px solid var(--border-color); color: var(--accent-primary); padding: 0.5rem 1rem; border-radius: 4px; cursor: pointer; font-family: 'Orbitron', sans-serif; font-size: 0.7rem; z-index: 100; box-shadow: var(--border-glow); display: flex; align-items: center; gap: 0.5rem; transition: all 0.3s;">
+            <span style="font-size: 1rem;">🎨</span> CUSTOMIZE
+        </button>
+
+        <!-- CUSTOMIZATION SIDEBAR -->
+        <div id="customizerSidebar" style="position: fixed; top: 0; right: -400px; width: 350px; height: 100vh; background: rgba(3, 7, 18, 0.95); backdrop-filter: blur(25px); border-left: 1px solid var(--border-color); z-index: 1000; transition: right 0.4s cubic-bezier(0.4, 0, 0.2, 1); padding: 2rem; overflow-y: auto; box-shadow: -10px 0 30px rgba(0,0,0,0.5);">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 2.5rem;">
+                <h2 style="margin: 0; font-size: 1.2rem; color: var(--accent-primary); letter-spacing: 2px;">THEME CONFIG</h2>
+                <button onclick="toggleCustomizer()" style="background: transparent; border: none; color: var(--text-secondary); cursor: pointer; font-size: 1.5rem; transition: color 0.2s;">&times;</button>
+            </div>
+
+            <div style="margin-bottom: 2rem;">
+                <div class="card-title" style="margin-bottom: 1rem;">Quick Presets</div>
+                <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 0.75rem;">
+                    <button class="nav-btn" style="font-size: 0.6rem; margin: 0; padding: 0.5rem;" onclick="applyPreset('#00d4ff')">Tron Cyan</button>
+                    <button class="nav-btn" style="font-size: 0.6rem; margin: 0; padding: 0.5rem;" onclick="applyPreset('#39ff14')">Matrix</button>
+                    <button class="nav-btn" style="font-size: 0.6rem; margin: 0; padding: 0.5rem;" onclick="applyPreset('#ff003c')">Red Alert</button>
+                    <button class="nav-btn" style="font-size: 0.6rem; margin: 0; padding: 0.5rem;" onclick="applyPreset('#a855f7')">Purple Rain</button>
+                    <button class="nav-btn" style="font-size: 0.6rem; margin: 0; padding: 0.5rem;" onclick="applyPreset('#f59e0b')">Gold Ember</button>
+                    <button class="nav-btn" style="font-size: 0.6rem; margin: 0; padding: 0.5rem;" onclick="applyPreset('#e2e8f0')">Mono Steel</button>
+                </div>
+            </div>
+
+            <div style="margin-bottom: 2rem;">
+                <div class="card-title" style="margin-bottom: 1rem;">Primary Accent</div>
+                <div style="display: flex; align-items: center; gap: 1rem; background: var(--card-bg); padding: 0.75rem; border: 1px solid var(--border-color); border-radius: 4px;">
+                    <input type="color" id="accentPicker" value="#00d4ff" oninput="updateAccent(this.value)" style="background: none; border: none; width: 40px; height: 40px; cursor: pointer;">
+                    <span id="accentHex" style="font-family: 'Space Mono', monospace; font-size: 0.9rem; color: #fff;">#00d4ff</span>
+                </div>
+            </div>
+
+            <div style="margin-bottom: 2rem;">
+                <div class="card-title" style="margin-bottom: 1rem;">Circuit Grid Intensity</div>
+                <input type="range" min="0" max="100" value="15" class="slider" id="gridSlider" oninput="updateGrid(this.value)" style="width: 100%; accent-color: var(--accent-primary);">
+            </div>
+            
+            <div style="margin-bottom: 2rem;">
+                <div class="card-title" style="margin-bottom: 1rem;">Interface Mode</div>
+                <div style="display: flex; gap: 0.5rem;">
+                    <button class="nav-btn active" id="modeDark" style="flex: 1; font-size: 0.7rem;" onclick="updateMode('dark')">Dark</button>
+                    <button class="nav-btn" id="modeLight" style="flex: 1; font-size: 0.7rem;" onclick="updateMode('light')">Light</button>
+                </div>
+            </div>
+
+            <button class="nav-btn" style="width: 100%; margin-top: 1rem; border-color: var(--accent-red); color: var(--accent-red);" onclick="resetTheme()">RESET TO DEFAULT</button>
+        </div>
+        <!-- ANNUAL VIEW -->
+        <section id="annualView" class="view-section active">
+             <div class="calendar-header">
+                <div style="display: flex; align-items: center; gap: 1rem;">
+                    <h1>Annual Performance</h1>
+                    <select id="yearSelector" onchange="updateAnnualView()" style="background: var(--card-bg); color: var(--text-primary); border: 1px solid var(--border-color); padding: 0.5rem; border-radius: 0.5rem; font-family: inherit; font-size: 1rem; cursor: pointer;"></select>
+                </div>
+            </div>
+             <div class="grid">
+                <div class="card">
+                    <div class="card-title">Gross P&L</div>
+                    <div class="card-value" id="annual_gross_pl">-</div>
+                </div>
+                <div class="card">
+                    <div class="card-title">Fees</div>
+                    <div class="card-value negative" id="annual_fees">-</div>
+                </div>
+                <div class="card">
+                    <div class="card-title">Net P&L</div>
+                    <div class="card-value" id="annual_net_pl">-</div>
+                </div>
+                <div class="card">
+                    <div class="card-title">Expenses</div>
+                    <div class="card-value negative" id="annual_expenses">-</div>
+                </div>
+                <div class="card">
+                    <div class="card-title">Profit Factor</div>
+                    <div class="card-value" id="annual_pf">-</div>
+                </div>
+                <div class="card">
+                    <div class="card-title">Win Rate</div>
+                    <div class="card-value" id="annual_wr">-</div>
+                </div>
+                <div class="card">
+                    <div class="card-title">Total Trades</div>
+                    <div class="card-value" id="annual_trades">-</div>
+                </div>
+            </div>
+            <div style="display: flex; gap: 1.5rem; margin-bottom: 1.5rem; align-items: stretch;">
+                <div class="card" style="flex: 2; margin-bottom: 0;">
+                    <div class="card-title">Performance Analysis (YTD)</div>
+                    <div style="display: flex; flex-direction: column; gap: 1rem;">
+                        <div>
+                            <div class="card-title" style="font-size: 0.8rem; color: var(--text-secondary); margin-bottom: 0.5rem;">Cumulative Equity</div>
+                            <div class="chart-container" style="height: 250px;"><canvas id="equityChartAnnual"></canvas></div>
+                        </div>
+                        <div>
+                            <div class="card-title" style="font-size: 0.8rem; color: var(--text-secondary); margin-bottom: 0.5rem;">Drawdown</div>
+                            <div class="chart-container" style="height: 150px;"><canvas id="drawdownChartAnnual"></canvas></div>
+                        </div>
+                    </div>
+                </div>
+                <div class="card" style="flex: 1; margin-bottom: 0; display: flex; flex-direction: column;">
+                     <div class="card-title">Monthly Net P&L</div>
+                     <div class="chart-container" style="flex-grow: 1; min-height: 400px;"><canvas id="monthlyChartAnnual"></canvas></div>
+                </div>
+            </div>
+            <h3 style="margin-bottom: 1rem;">Select a Month</h3>
+            <div class="annual-grid" id="annualMonthGrid"></div>
+        </section>
+
+        <!-- MONTHLY VIEW -->
+        <section id="monthlyView" class="view-section">
+             <div class="calendar-header" style="margin-bottom: 0.5rem;"> <h1 id="monthlyViewTitle" style="font-size: 1.5rem;">Monthly Analysis</h1> </div>
+             <div class="grid" style="grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 1rem; margin-bottom: 1rem; background: var(--hover-bg); padding: 0.75rem; border-radius: 0.5rem;" id="monthlyStatsDashboard"></div>
+            <div style="display: flex; gap: 1rem; margin-bottom: 1rem;">
+                <div class="card" style="flex: 2; margin-bottom: 0;">
+                    <div class="calendar-header">
+                        <div><span class="card-title">Calendar</span><h2 id="currentMonthDisplay" style="margin: 0;">-</h2></div>
+                        <div><button class="calendar-nav-btn" onclick="changeMonth(-1)">Prev</button><button class="calendar-nav-btn" onclick="changeMonth(1)">Next</button></div>
+                    </div>
+                    <div class="calendar-grid" id="calendarGrid"></div>
+                </div>
+                <div class="card" style="flex: 1; margin-bottom: 0;">
+                     <div class="card-title">Gain / Loss Stats <span id="glStatsMonthLabel"></span></div>
+                     <div style="overflow-x: auto;">
+                        <table style="text-align: center;">
+                            <thead><tr><th style="text-align: left;">Metric</th><th style="text-align: center;">Won</th><th style="text-align: center;">Lost</th></tr></thead>
+                            <tbody id="gainLossBody">
+                                 <tr> <td style="text-align: left;">Total P&L</td> <td id="gl_total_won" class="positive">-</td> <td id="gl_total_lost" class="negative">-</td> </tr>
+                                 <tr> <td style="text-align: left;">Avg P&L ($)</td> <td id="gl_avg_won" class="positive">-</td> <td id="gl_avg_lost" class="negative">-</td> </tr>
+                                 <tr> <td style="text-align: left;">Avg P&L (%)</td> <td id="gl_pct_won" class="positive">-</td> <td id="gl_pct_lost" class="negative">-</td> </tr>
+                                 <tr> <td style="text-align: left;">Trades</td> <td id="gl_count_won">-</td> <td id="gl_count_lost">-</td> </tr>
+                                 
+                                 <tr style="border-top: 2px solid var(--border-color);"> <td style="text-align: left;">Streak</td> <td id="gl_streak_win">-</td> <td id="gl_streak_loss">-</td> </tr>
+                                 <tr> <td style="text-align: left;">Fixed Expenses</td> <td id="gl_expenses" class="negative" colspan="2">-</td> </tr>
+                            </tbody>
+                        </table>
+                     </div>
+                </div>
+            </div>
+            
+            <div class="card" style="margin-bottom: 1rem;">
+                <div class="card-title">Monthly Performance Charts</div>
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+                     <div>
+                        <div class="card-title" style="font-size: 0.8rem; color: var(--text-secondary); margin-bottom: 0.5rem; text-align: center;">Cumulative Equity</div>
+                        <div class="chart-container" style="height: 160px;"><canvas id="monthlyEquityChart"></canvas></div>
+                     </div>
+                     <div>
+                        <div class="card-title" style="font-size: 0.8rem; color: var(--text-secondary); margin-bottom: 0.5rem; text-align: center;">Daily Net P&L</div>
+                        <div class="chart-container" style="height: 160px;"><canvas id="monthlyDailyBarChart"></canvas></div>
+                     </div>
+                </div>
+            </div>
+            <div class="card">
+                 <div class="card-title">Monthly Ticker Performance <span id="tickerMonthLabel"></span></div>
+                 <div style="overflow-x: auto; max-height: 400px; overflow-y: auto;">
+                    <table id="monthlyTickersTable"><thead><tr><th>Symbol</th><th>Trades</th><th>Net P&L</th></tr></thead><tbody></tbody></table>
+                 </div>
+            </div>
+        </section>
+
+        <!-- DAILY VIEW -->
+        <section id="dailyView" class="view-section">
+            <div class="calendar-header"><h1>Daily Details</h1><h2 id="dailyDateTitle" style="color: var(--accent_blue);">-</h2><button onclick="saveTagsToFile()" style="background:var(--accent-primary); color:#000; border:none; padding:0.4rem 1rem; border-radius:8px; cursor:pointer; font-weight:600; font-size:0.8rem; margin-left:auto;">&#128190; Save Tags</button></div>
+            <div class="grid" id="dailyStatsGrid">
+                <div class="card"><div class="card-title">Daily P&L</div><div class="card-value" id="daily_pnl">-</div></div>
+                <div class="card"><div class="card-title">Trades</div><div class="card-value" id="daily_trades_count">-</div></div>
+                <div class="card"><div class="card-title">Commissions</div><div class="card-value negative" id="daily_commissions">-</div></div>
+            </div>
+            
+            <div class="card" style="margin-bottom: 2rem;">
+                 <div class="card-title">Gain / Loss Stats</div>
+                 <div style="overflow-x: auto;">
+                    <table style="text-align: center;">
+                        <thead><tr><th style="text-align: left;">Metric</th><th style="text-align: center;">Won</th><th style="text-align: center;">Lost</th></tr></thead>
+                        <tbody id="dailyGainLossBody">
+                             <tr> <td style="text-align: left;">Total P&L</td> <td id="d_gl_total_won" class="positive">-</td> <td id="d_gl_total_lost" class="negative">-</td> </tr>
+                             <tr> <td style="text-align: left;">Avg P&L ($)</td> <td id="d_gl_avg_won" class="positive">-</td> <td id="d_gl_avg_lost" class="negative">-</td> </tr>
+                             <tr> <td style="text-align: left;">Avg P&L (%)</td> <td id="d_gl_pct_won" class="positive">-</td> <td id="d_gl_pct_lost" class="negative">-</td> </tr>
+                             <tr> <td style="text-align: left;">Trades</td> <td id="d_gl_count_won">-</td> <td id="d_gl_count_lost">-</td> </tr>
+                             
+                             <tr style="border-top: 2px solid var(--border-color);"> <td style="text-align: left; font-weight: 700;">Ratios</td> <td id="d_gl_ratio_wl">-</td> <td id="d_gl_ratio_gp">-</td> </tr>
+                             <tr> <td style="text-align: left;">Gastos</td> <td id="d_gl_fees" class="negative">-</td> <td>-</td> </tr>
+                             <tr> <td style="text-align: left;">Max Drawdown</td> <td>-</td> <td id="d_gl_max_dd" class="negative">-</td> </tr>
+                             <tr> <td style="text-align: left;">Max Streak</td> <td id="d_gl_streak_win">-</td> <td id="d_gl_streak_loss">-</td> </tr>
+                             <tr style="border-top: 2px solid var(--border-color);"> <td style="text-align: left; font-weight: 700;">Trade Notes</td> <td colspan="2" id="d_gl_notes" style="text-align:left; color:var(--text-secondary); font-size:0.8rem;">-</td> </tr>
+                        </tbody>
+                    </table>
+                 </div>
+            </div>
+
+            <div class="card" style="margin-bottom: 2rem;">
+                 <div class="card-title">Day Equity & Execution</div>
+                 <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 2rem; align-items: start;">
+                     <div class="chart-container" style="height: 300px;">
+                        <canvas id="dailyEquityChart"></canvas>
+                     </div>
+                     <div style="overflow-x: auto; max-height: 400px; overflow-y: auto;">
+                        <table id="dailyTradesTable"><thead><tr><th>Symbol</th><th>Dir</th><th>Qty</th><th>Entry</th><th>Exit</th><th>P&L</th><th>Entry Tag</th><th>Exit Tag</th></tr></thead><tbody></tbody></table>
+                     </div>
+                 </div>
+            </div>
+        </section>
+
+        <!-- RATIOS VIEW -->
+        <section id="ratiosView" class="view-section">
+            <div class="calendar-header">
+                <div><span class="card-title">Detailed Ratios</span><h1 id="ratiosTitle">-</h1></div>
+                <div><button class="calendar-nav-btn" onclick="changeMonth(-1)">Prev</button><button class="calendar-nav-btn" onclick="changeMonth(1)">Next</button></div>
+            </div>
+            <div class="grid" id="ratiosGrid" style="grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));"></div>
+        </section>
+    </main>
+
+    <!-- TAG EDITOR MODAL -->
+    <div id="tagModal" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.85); z-index:9999; align-items:center; justify-content:center;">
+        <div style="background:var(--card-bg); border:1px solid var(--border-color); border-radius:16px; padding:2rem; max-width:520px; width:90%; box-shadow:0 0 40px rgba(0,212,255,0.15);">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1.5rem;">
+                <h2 style="margin:0; color:var(--accent-primary);" id="modalTitle">-</h2>
+                <button onclick="closeTagModal()" style="background:none; border:none; color:var(--text-secondary); font-size:1.5rem; cursor:pointer;">&times;</button>
+            </div>
+            <div style="margin-bottom:1rem;">
+                <div style="color:var(--text-secondary); margin-bottom:0.5rem; font-size:0.85rem;">Trade Details</div>
+                <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:0.5rem; margin-bottom:1rem;">
+                    <div><span style="color:var(--text-secondary);">Symbol:</span> <strong style="color:#60a5fa;" id="modalSymbol">-</strong></div>
+                    <div><span style="color:var(--text-secondary);">Dir:</span> <strong id="modalDir">-</strong></div>
+                    <div><span style="color:var(--text-secondary);">Qty:</span> <strong id="modalQty">-</strong></div>
+                    <div><span style="color:var(--text-secondary);">Entry:</span> <strong id="modalEntry">-</strong></div>
+                    <div><span style="color:var(--text-secondary);">Exit:</span> <strong id="modalExit">-</strong></div>
+                    <div><span style="color:var(--text-secondary);">P&L:</span> <strong id="modalPnL">-</strong></div>
+                </div>
+            </div>
+            <div style="margin-bottom:1rem;">
+                <label style="color:var(--text-secondary); font-size:0.85rem;">Entry Tag</label>
+                <div id="entryTagPresets" style="display:flex; flex-wrap:wrap; gap:0.4rem; margin:0.5rem 0;"></div>
+                <input id="entryTagInput" placeholder="Or type custom..." style="width:100%; background:rgba(255,255,255,0.05); border:1px solid var(--border-color); color:var(--text-primary); padding:0.5rem; border-radius:8px; box-sizing:border-box;">
+            </div>
+            <div style="margin-bottom:1rem;">
+                <label style="color:var(--text-secondary); font-size:0.85rem;">Exit Tag</label>
+                <div id="exitTagPresets" style="display:flex; flex-wrap:wrap; gap:0.4rem; margin:0.5rem 0;"></div>
+                <input id="exitTagInput" placeholder="Or type custom..." style="width:100%; background:rgba(255,255,255,0.05); border:1px solid var(--border-color); color:var(--text-primary); padding:0.5rem; border-radius:8px; box-sizing:border-box;">
+            </div>
+            <div style="margin-bottom:1.5rem;">
+                <label style="color:var(--text-secondary); font-size:0.85rem;">Note</label>
+                <textarea id="noteInput" placeholder="Optional note..." rows="2" style="width:100%; background:rgba(255,255,255,0.05); border:1px solid var(--border-color); color:var(--text-primary); padding:0.5rem; border-radius:8px; box-sizing:border-box; resize:vertical;"></textarea>
+            </div>
+            <div style="display:flex; gap:1rem; justify-content:flex-end;">
+                <button onclick="saveTagEntry()" style="background:var(--accent-primary); color:#000; border:none; padding:0.6rem 1.5rem; border-radius:8px; cursor:pointer; font-weight:600;">Save & Close</button>
+                <button onclick="closeTagModal()" style="background:rgba(255,255,255,0.1); color:var(--text-primary); border:none; padding:0.6rem 1.5rem; border-radius:8px; cursor:pointer;">Cancel</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        try {{
+            const annualStats = {annual_stats_json};
+            const annualCharts = {annual_charts_json};
+            const availableYears = {available_years_json};
+            
+            const dailyData = {daily_data_json};
+            const monthlyData = {monthly_data_json};
+            const monthlySymbols = {monthly_symbols_json};
+            const monthlyStats = {monthly_stats_json};
+            const monthlyGainLoss = {monthly_gain_loss_json};
+            const monthlyEquityData = {monthly_equity_json};
+            const dailyEquityData = {daily_equity_json};
+            const dailyTags = {daily_tags_json};
+
+            let currentView = 'annual';
+            let currentDate = new Date(); 
+            let currentYearView = 'All';
+            
+            let selectedDayKey = null;
+            let monthlyChartInstance = null;
+            let monthlyBarChartInstance = null;
+            let dailyChartInstance = null;
+            let annualEquityChart = null;
+            let annualMonthlyChart = null;
+            let longShortChartInstance = null;
+
+            function switchView(viewName) {{
+                document.querySelectorAll('.view-section').forEach(el => el.classList.remove('active'));
+                document.querySelectorAll('.nav-btn').forEach(el => el.classList.remove('active'));
+                document.getElementById(viewName + 'View').classList.add('active');
+                document.getElementById('btn-' + viewName).classList.add('active');
+                currentView = viewName;
+                if (viewName === 'annual') renderAnnual();
+                if (viewName === 'monthly') renderCalendar();
+                if (viewName === 'daily') renderDaily();
+                if (viewName === 'ratios') renderRatios();
+            }}
+            
+            function renderAnnual() {{
+                const sel = document.getElementById('yearSelector');
+                if (sel.options.length === 0) {{
+                    availableYears.forEach(y => {{
+                        const opt = document.createElement('option');
+                        opt.value = y;
+                        opt.innerText = y;
+                        sel.appendChild(opt);
+                    }});
+                    sel.value = currentYearView;
+                }}
+                
+                const stats = annualStats[currentYearView];
+                if(stats) {{
+                    const grossEl = document.getElementById('annual_gross_pl');
+                    grossEl.innerText = '$' + stats.gross_pl.toLocaleString(undefined, {{minimumFractionDigits: 2, maximumFractionDigits: 2}});
+                    grossEl.className = 'card-value ' + (stats.gross_pl >= 0 ? 'positive' : 'negative');
+
+                    const feesEl = document.getElementById('annual_fees');
+                    feesEl.innerText = '-$' + Math.abs(stats.fees).toLocaleString(undefined, {{minimumFractionDigits: 2, maximumFractionDigits: 2}});
+
+                    const plEl = document.getElementById('annual_net_pl');
+                    plEl.innerText = '$' + stats.net_pl.toLocaleString(undefined, {{minimumFractionDigits: 2, maximumFractionDigits: 2}});
+                    plEl.className = 'card-value ' + (stats.net_pl >= 0 ? 'positive' : 'negative');
+
+                    const expEl = document.getElementById('annual_expenses');
+                    const expenses = stats.expenses || 0;
+                    expEl.innerText = '-$' + Math.abs(expenses).toLocaleString(undefined, {{minimumFractionDigits: 2, maximumFractionDigits: 2}});
+
+                    document.getElementById('annual_pf').innerText = stats.profit_factor === Infinity ? 'Inf' : stats.profit_factor.toFixed(2);
+                    document.getElementById('annual_wr').innerText = stats.win_rate.toFixed(2) + '%';
+                    document.getElementById('annual_trades').innerText = stats.total_trades;
+                }}
+                
+                if (typeof Chart !== 'undefined') updateAnnualCharts();
+                
+                const container = document.getElementById('annualMonthGrid');
+                container.innerHTML = '';
+                const allMonths = Object.keys(monthlyData).sort();
+                const visibleMonths = (currentYearView === 'All') ? allMonths : allMonths.filter(m => m.startsWith(currentYearView));
+                
+                visibleMonths.forEach(mKey => {{
+                    const pl = monthlyData[mKey];
+                    const stats = monthlyStats[mKey];
+                    const card = document.createElement('div');
+                    card.className = 'month-card';
+                    card.onclick = () => {{ currentDate = new Date(mKey + '-02'); switchView('monthly'); }};
+                    card.innerHTML = `<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1rem; position:relative; z-index:10;"><span style="font-weight:600; font-size:1.1rem;">${{mKey}}</span><span class="${{pl >= 0 ? 'positive' : 'negative'}}" style="font-weight:700;">${{pl >= 0 ? '+' : '-'}}$${{Math.abs(pl).toLocaleString(undefined, {{minimumFractionDigits: 2, maximumFractionDigits: 2}})}}</span></div><div style="font-size:0.85rem; color:var(--text-secondary); position:relative; z-index:10;"><div>Win Rate: ${{stats.win_rate.toFixed(2)}}%</div><div>Trades: ${{stats.total_trades}}</div></div>`;
+                    container.appendChild(card);
+                }});
+            }}
+            
+            function updateAnnualView() {{
+                currentYearView = document.getElementById('yearSelector').value;
+                renderAnnual();
+            }}
+
+            function updateAnnualCharts() {{
+                const data = annualCharts[currentYearView];
+                if(!data) return;
+                
+                const ctxEquity = document.getElementById('equityChartAnnual').getContext('2d');
+                if(annualEquityChart) annualEquityChart.destroy();
+                annualEquityChart = new Chart(ctxEquity, {{ 
+                    type: 'line', 
+                    data: {{ 
+                        labels: data.equity.labels, 
+                        datasets: [{{ 
+                            label: 'Cumulative P&L', 
+                            data: data.equity.data, 
+                            borderColor: '#10b981', 
+                            backgroundColor: 'rgba(16, 185, 129, 0.1)', 
+                            borderWidth: 2, 
+                            pointRadius: 0, 
+                            fill: {{
+                                target: 'origin',
+                                above: 'rgba(16, 185, 129, 0.15)',
+                                below: 'rgba(239, 68, 68, 0.15)'
+                            }}, 
+                            tension: 0.1 
+                        }}] 
+                    }}, 
+                    options: {{ responsive: true, maintainAspectRatio: false, plugins: {{ legend: {{ display: false }} }}, scales: {{ x: {{ ticks: {{ color: '#94a3b8', maxTicksLimit: 20 }}, grid: {{ display: false }} }}, y: {{ grid: {{ color: '#334155' }}, ticks: {{ color: '#94a3b8' }} }} }} }} 
+                }});
+
+                const ctxDD = document.getElementById('drawdownChartAnnual').getContext('2d');
+                if(window.annualDDChart) window.annualDDChart.destroy();
+                window.annualDDChart = new Chart(ctxDD, {{
+                    type: 'line',
+                    data: {{
+                        labels: data.drawdown.labels,
+                        datasets: [{{
+                            label: 'Drawdown',
+                            data: data.drawdown.data,
+                            borderColor: '#ef4444',
+                            backgroundColor: 'rgba(239, 68, 68, 0.15)',
+                            borderWidth: 2,
+                            pointRadius: 0,
+                            fill: true,
+                            tension: 0.1
+                        }}]
+                    }},
+                    options: {{ responsive: true, maintainAspectRatio: false, plugins: {{ legend: {{ display: false }} }}, scales: {{ x: {{ display: false }}, y: {{ grid: {{ color: '#334155' }}, ticks: {{ color: '#94a3b8' }} }} }} }}
+                }});
+
+                const ctxMonthly = document.getElementById('monthlyChartAnnual').getContext('2d');
+                if(annualMonthlyChart) annualMonthlyChart.destroy();
+                const barColors = data.monthly.data.map(v => v >= 0 ? '#10b981' : '#ef4444');
+                annualMonthlyChart = new Chart(ctxMonthly, {{ 
+                    type: 'bar', 
+                    data: {{ 
+                        labels: data.monthly.labels, 
+                        datasets: [{{ 
+                            label: 'Monthly P&L', 
+                            data: data.monthly.data, 
+                            backgroundColor: barColors, 
+                            borderRadius: 4 
+                        }}] 
+                    }}, 
+                    options: {{ responsive: true, maintainAspectRatio: false, plugins: {{ legend: {{ display: false }} }}, scales: {{ y: {{ grid: {{ color: '#334155' }}, ticks: {{ color: '#94a3b8' }} }}, x: {{ ticks: {{ color: '#94a3b8' }} }} }} }} 
+                }});
+            }}
+
+            const monthNames = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+            function renderCalendar() {{
+                const year = currentDate.getFullYear();
+                const month = currentDate.getMonth();
+                const monthKey = `${{year}}-${{String(month + 1).padStart(2, '0')}}`;
+                const monthPnl = monthlyData[monthKey] || 0;
+                document.getElementById('currentMonthDisplay').innerHTML = `${{monthNames[month]}} ${{year}} ${{monthPnl > 0 ? `<span class="positive">(+$${{monthPnl.toLocaleString(undefined, {{minimumFractionDigits: 2, maximumFractionDigits: 2}})}})</span>` : (monthPnl < 0 ? `<span class="negative">(-$${{Math.abs(monthPnl).toLocaleString(undefined, {{minimumFractionDigits: 2, maximumFractionDigits: 2}})}})</span>` : `<span>($0.00)</span>`)}}`;
+                
+                const grid = document.getElementById('calendarGrid'); grid.innerHTML = '';
+                ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Week'].forEach(d => {{ const el = document.createElement('div'); el.className = 'day-name'; el.innerText = d; grid.appendChild(el); }});
+                
+                const firstDay = new Date(year, month, 1).getDay();
+                const daysInMonth = new Date(year, month + 1, 0).getDate();
+                const startDay = (firstDay + 6) % 7; // 0=Mon, ... 6=Sun
+                
+                // Start Padding (Only Mon-Fri)
+                for(let i=0; i<startDay; i++) {{
+                    if(i < 5) grid.appendChild(createEmptyCell());
+                }}
+                
+                let weeklyPnl = 0;
+                for(let i=1; i<=daysInMonth; i++) {{
+                    const dDateStr = `${{year}}-${{String(month+1).padStart(2, '0')}}-${{String(i).padStart(2, '0')}}`;
+                    const dData = dailyData[dDateStr];
+                    const dayOfWeek = (startDay + i - 1) % 7; // 0=Mon
+                    
+                    if(dData) weeklyPnl += dData.pnl;
+                    
+                    // Render only Mon-Fri (Indices 0-4)
+                    if(dayOfWeek < 5) {{
+                        const cell = document.createElement('div'); cell.className = 'day-cell';
+                        if(dData) {{
+                            if(dData.pnl > 0) cell.classList.add('bg-green'); else if(dData.pnl < 0) cell.classList.add('bg-red');
+                            cell.innerHTML = `<div class="day-number">${{i}}</div><div><div class="day-pnl ${{(dData.pnl>=0?'positive':'negative')}}">${{dData.pnl < 0 ? '-' : ''}}$${{Math.abs(dData.pnl).toLocaleString(undefined, {{minimumFractionDigits: 2, maximumFractionDigits: 2}})}}</div><div class="day-trades">${{dData.count}} trds</div></div>`;
+                            cell.onclick = () => {{ selectedDayKey = dDateStr; switchView('daily'); }};
+                        }} else {{ cell.style.opacity = '0.5'; cell.innerHTML = `<div class="day-number">${{i}}</div>`; }}
+                        grid.appendChild(cell);
+                    }}
+                    
+                    // End of Week (Sunday=6) -> Append Total
+                    if(dayOfWeek === 6) {{ 
+                        appendWeeklyTotal(grid, weeklyPnl); 
+                        weeklyPnl = 0; 
+                    }}
+                }}
+                
+                // End Month Padding
+                const endWeekDay = (startDay + daysInMonth - 1) % 7; // 0=Mon
+                // If month ends before Sunday, fill remaining Mon-Fri slots then append total
+                if (endWeekDay !== 6) {{
+                    for(let k=endWeekDay+1; k<5; k++) grid.appendChild(createEmptyCell()); // Fill until Friday
+                    appendWeeklyTotal(grid, weeklyPnl);
+                }}
+                
+                renderMonthlyStatsDashboard(monthKey);
+                renderGainLossStats(monthKey);
+                renderMonthlyTickers(monthKey);
+                if (typeof Chart !== 'undefined') {{
+                    renderMonthlyEquityChart(monthKey);
+                    renderMonthlyBarChart(monthKey);
+                }}
+            }}
+
+            function createEmptyCell() {{ const d=document.createElement('div'); d.className='day-cell empty'; return d; }}
+
+            function renderMonthlyBarChart(monthKey) {{
+                const ctx = document.getElementById('monthlyDailyBarChart').getContext('2d');
+                if(monthlyBarChartInstance) monthlyBarChartInstance.destroy();
+                
+                const [y, m] = monthKey.split('-').map(Number);
+                const daysInMonth = new Date(y, m, 0).getDate();
+                const labels = [];
+                const data = [];
+                const bgColors = [];
+                
+                for(let i=1; i<=daysInMonth; i++) {{
+                    const dStr = `${{y}}-${{String(m).padStart(2,'0')}}-${{String(i).padStart(2,'0')}}`;
+                    const d = dailyData[dStr];
+                    labels.push(i);
+                    const val = d ? d.pnl : 0;
+                    data.push(val);
+                    bgColors.push(val >= 0 ? '#10b981' : '#ef4444');
+                }}
+                
+                monthlyBarChartInstance = new Chart(ctx, {{
+                    type: 'bar',
+                    data: {{
+                        labels: labels,
+                        datasets: [{{
+                            label: 'Daily P&L',
+                            data: data,
+                            backgroundColor: bgColors,
+                            borderRadius: 2
+                        }}]
+                    }},
+                    options: {{ responsive: true, maintainAspectRatio: false, plugins: {{ legend: {{ display: false }} }}, scales: {{ y: {{ grid: {{ color: '#334155' }}, ticks: {{ color: '#94a3b8' }} }}, x: {{ ticks: {{ color: '#94a3b8' }}, grid: {{ display: false }} }} }} }} 
+                }});
+            }}
+
+            function renderMonthlyEquityChart(monthKey) {{
+                const ctx = document.getElementById('monthlyEquityChart').getContext('2d');
+                if(monthlyChartInstance) monthlyChartInstance.destroy();
+                
+                const data = monthlyEquityData[monthKey] || {{labels: [], data: []}};
+                monthlyChartInstance = new Chart(ctx, {{
+                    type: 'line',
+                    data: {{
+                        labels: data.labels,
+                        datasets: [{{
+                            label: 'Month Equity',
+                            data: data.data,
+                            borderColor: '#10b981',
+                            backgroundColor: 'rgba(16, 185, 129, 0.1)',
+                            borderWidth: 2,
+                            pointRadius: 2,
+                            fill: {{
+                                target: 'origin',
+                                above: 'rgba(16, 185, 129, 0.1)',
+                                below: 'rgba(239, 68, 68, 0.1)'
+                            }},
+                            tension: 0.1
+                        }}]
+                    }},
+                    options: {{ responsive: true, maintainAspectRatio: false, plugins: {{ legend: {{ display: false }} }}, scales: {{ x: {{ ticks: {{ color: '#94a3b8' }}, grid: {{ display: false }} }}, y: {{ grid: {{ color: '#334155' }}, ticks: {{ color: '#94a3b8' }} }} }} }} 
+                }});
+            }}
+            
+            function renderMonthlyStatsDashboard(monthKey) {{
+                const container = document.getElementById('monthlyStatsDashboard');
+                const stats = monthlyStats[monthKey];
+                const allStats = monthlyGainLoss[monthKey] ? monthlyGainLoss[monthKey].all : null;
+                if(!stats || !allStats) {{ container.innerHTML = 'No data'; return; }}
+                const mkCard = (title, val, cls='') => `<div><div class="card-title">${{title}}</div><div class="card-value ${{cls}}">${{val}}</div></div>`;
+                const netPlClass = allStats.total_pl >= 0 ? 'positive' : 'negative';
+                const avgPlClass = allStats.avg_pl >= 0 ? 'positive' : 'negative';
+                const avgPctClass = allStats.avg_pct >= 0 ? 'positive' : 'negative';
+                container.innerHTML = `
+                    ${{mkCard('Net Profit', '$'+allStats.total_pl.toLocaleString(undefined, {{minimumFractionDigits: 2, maximumFractionDigits: 2}}), netPlClass)}}
+                    ${{mkCard('Win Rate', stats.win_rate.toFixed(2)+'%')}}
+                    ${{mkCard('Profit Factor', stats.profit_factor === Infinity ? 'Inf' : stats.profit_factor.toFixed(2))}}
+                    ${{mkCard('Total Trades', stats.total_trades)}}
+                    ${{mkCard('Avg Trade ($)', '$'+allStats.avg_pl.toFixed(2), avgPlClass)}}
+                    ${{mkCard('Avg Trade (%)', allStats.avg_pct.toFixed(2)+'%', avgPctClass)}}
+                `;
+            }}
+            
+            function renderDaily() {{
+                const header = document.getElementById('dailyDateTitle');
+                const pnlEl = document.getElementById('daily_pnl'); 
+                const tradesEl = document.getElementById('daily_trades_count');
+                const commEl = document.getElementById('daily_commissions');
+                const tbody = document.querySelector('#dailyTradesTable tbody');
+                ['d_gl_total_won','d_gl_total_lost','d_gl_avg_won','d_gl_avg_lost','d_gl_pct_won','d_gl_pct_lost','d_gl_count_won','d_gl_count_lost','d_gl_ratio_wl','d_gl_ratio_gp','d_gl_fees','d_gl_max_dd','d_gl_streak_win','d_gl_streak_loss'].forEach(id => document.getElementById(id).innerText = '-');
+                tbody.innerHTML = '';
+                if(!selectedDayKey) {{ header.innerText = "Select a day from the calendar"; return; }}
+                const data = dailyData[selectedDayKey];
+                header.innerText = selectedDayKey;
+                if(!data) {{ pnlEl.innerText = '-'; commEl.innerText = '-'; return; }}
+                pnlEl.innerText = '$' + data.pnl.toLocaleString(undefined, {{minimumFractionDigits: 2, maximumFractionDigits: 2}});
+                pnlEl.className = data.pnl >= 0 ? "card-value positive" : "card-value negative";
+                tradesEl.innerText = data.count;
+                commEl.innerText = '$' + data.fees.toLocaleString(undefined, {{minimumFractionDigits: 2, maximumFractionDigits: 2}});
+                const stats = data.stats;
+                if(stats) {{
+                    ['won','lost'].forEach(t => {{ 
+                        const s = stats[t]; 
+                        document.getElementById('d_gl_total_'+t).innerText = '$'+s.total_pl.toLocaleString(undefined, {{minimumFractionDigits: 2, maximumFractionDigits: 2}}); 
+                        document.getElementById('d_gl_avg_'+t).innerText = '$'+s.avg_pl.toLocaleString(undefined, {{minimumFractionDigits: 2, maximumFractionDigits: 2}}); 
+                        document.getElementById('d_gl_pct_'+t).innerText = s.avg_pct.toFixed(2)+'%'; 
+                        document.getElementById('d_gl_count_'+t).innerText = s.count; 
+                    }});
+                    const adv = stats.advanced;
+                    if(adv) {{
+                        const wlRatio = adv.win_loss_ratio;
+                        document.getElementById('d_gl_ratio_wl').innerText = 'W/L: ' + wlRatio.toFixed(2) + ':1';
+                        document.getElementById('d_gl_ratio_wl').className = wlRatio >= 1 ? 'positive' : 'negative';
+                        const gpVal = adv.gain_to_pain;
+                        document.getElementById('d_gl_ratio_gp').innerText = 'G/P: ' + gpVal.toFixed(2) + ':1';
+                        document.getElementById('d_gl_ratio_gp').className = gpVal >= 1 ? 'positive' : 'negative';
+                        document.getElementById('d_gl_fees').innerText = '$'+data.fees.toLocaleString(undefined, {{minimumFractionDigits: 2, maximumFractionDigits: 2}});
+                        document.getElementById('d_gl_max_dd').innerText = '$'+adv.max_dd.toLocaleString(undefined, {{minimumFractionDigits: 2, maximumFractionDigits: 2}});
+                        document.getElementById('d_gl_streak_win').innerHTML = `<div class="positive">${{adv.max_consec_wins}}</div>`;
+                        document.getElementById('d_gl_streak_loss').innerHTML = `<div class="negative">${{adv.max_consec_losses}}</div>`;
+                    }}
+                }}
+                // Collect notes from the day's trades
+                const notes = [];
+                data.trades.forEach(t => {{
+                    const tid = t.trade_id || '';
+                    const tagData = dailyTags[tid] || {{}};
+                    const note = tagData.note || t.note || '';
+                    if (note) notes.push(`<strong>${{t.symbol}}</strong>: ${{note}}`);
+                }});
+                document.getElementById('d_gl_notes').innerHTML = notes.length > 0 ? notes.join('<br>') : '-';
+                data.trades.forEach(t => {{
+                    const row = document.createElement('tr');
+                    const tid = t.trade_id || '';
+                    const tagData = dailyTags[tid] || {{}};
+                    const entryTag = tagData.entry_tag || t.entry_tag || t.tag || '';
+                    const exitTag = tagData.exit_tag || t.exit_tag || '';
+                    const tagStyle = 'font-size:0.7rem; padding:2px 6px; border-radius:10px; background:rgba(0,212,255,0.15); color:#00d4ff; white-space:nowrap; display:inline-block; margin:1px;';
+                    const tagCell = (tagStr) => {{
+                        if (!tagStr) return '';
+                        return tagStr.split(',').map(t => t.trim()).filter(Boolean).map(t => `<span style="${{tagStyle}}">${{t}}</span>`).join('');
+                    }};
+                    row.innerHTML = `<td style="font-weight:bold; color:#60a5fa; cursor:pointer;" onclick="openTagModal('${{tid.replace(/'/g, "\\'")}}', '${{t.symbol}}', '${{t.type}}', ${{t.quantity}}, ${{t.entry}}, ${{t.exit}}, ${{t.pl}})">${{t.symbol}}</td><td>${{t.type}}</td><td>${{t.quantity}}</td><td>$${{t.entry.toFixed(2)}}</td><td>$${{t.exit.toFixed(2)}}</td><td class="${{t.pl >= 0?'positive':'negative'}}">$${{t.pl.toFixed(2)}}</td><td>${{tagCell(entryTag)}}</td><td>${{tagCell(exitTag)}}</td>`;
+                    tbody.appendChild(row);
+                }});
+                if (typeof Chart !== 'undefined') renderDailyEquityChart(selectedDayKey);
+            }}
+
+            function openTagModal(tradeId, symbol, dir, qty, entry, exit, pl) {{
+                document.getElementById('modalTitle').innerText = symbol + ' — ' + dir;
+                document.getElementById('modalSymbol').innerText = symbol;
+                document.getElementById('modalDir').innerText = dir;
+                document.getElementById('modalQty').innerText = qty;
+                document.getElementById('modalEntry').innerText = '$' + entry.toFixed(4);
+                document.getElementById('modalExit').innerText = '$' + exit.toFixed(4);
+                const plEl = document.getElementById('modalPnL');
+                plEl.innerText = '$' + pl.toFixed(2);
+                plEl.className = pl >= 0 ? 'positive' : 'negative';
+
+                // Load existing tags
+                const existing = dailyTags[tradeId] || {{}};
+                document.getElementById('entryTagInput').value = existing.entry_tag || '';
+                document.getElementById('exitTagInput').value = existing.exit_tag || '';
+                document.getElementById('noteInput').value = existing.note || '';
+
+                // Load custom presets from localStorage
+                let customEntry = [];
+                let customExit = [];
+                try {{
+                    customEntry = JSON.parse(localStorage.getItem('customEntryPresets') || '[]');
+                    customExit = JSON.parse(localStorage.getItem('customExitPresets') || '[]');
+                }} catch(e) {{}}
+
+                // Standard presets
+                const stdPresets = ['Momentum', 'Breakout', 'Reversal', 'News', 'Scalp', 'Swing', 'Pullback', 'Trend Follow', 'Fade', 'Gap', 'VWAP', 'Support', 'Resistance'];
+
+                ['entryTagPresets', 'exitTagPresets'].forEach(containerId => {{
+                    const container = document.getElementById(containerId);
+                    container.innerHTML = '';
+                    const inputId = containerId === 'entryTagPresets' ? 'entryTagInput' : 'exitTagInput';
+                    const customs = containerId === 'entryTagPresets' ? customEntry : customExit;
+
+                    // Show custom presets first (with remove hint)
+                    customs.forEach(tag => {{
+                        const btn = document.createElement('button');
+                        btn.innerText = tag;
+                        btn.style.cssText = 'background:rgba(0,212,255,0.25); color:#fff; border:1px solid var(--accent-primary); padding:4px 10px; border-radius:12px; cursor:pointer; font-size:0.75rem;';
+                        btn.onmouseenter = () => {{ btn.style.background = 'rgba(0,212,255,0.5)'; }};
+                        btn.onmouseleave = () => {{ btn.style.background = 'rgba(0,212,255,0.25)'; }};
+                        btn.onclick = () => {{
+                            const cur = document.getElementById(inputId).value;
+                            const tags = cur ? cur.split(',').map(s => s.trim()).filter(Boolean) : [];
+                            if (!tags.includes(tag)) {{
+                                tags.push(tag);
+                                document.getElementById(inputId).value = tags.join(', ');
+                            }}
+                        }};
+                        container.appendChild(btn);
+                    }});
+
+                    // Standard presets
+                    stdPresets.forEach(tag => {{
+                        const btn = document.createElement('button');
+                        btn.innerText = tag;
+                        btn.style.cssText = 'background:rgba(0,212,255,0.1); color:var(--text-primary); border:1px solid var(--border-color); padding:4px 10px; border-radius:12px; cursor:pointer; font-size:0.75rem;';
+                        btn.onmouseenter = () => {{ btn.style.background = 'rgba(0,212,255,0.3)'; }};
+                        btn.onmouseleave = () => {{ btn.style.background = 'rgba(0,212,255,0.1)'; }};
+                        btn.onclick = () => {{
+                            const cur = document.getElementById(inputId).value;
+                            const tags = cur ? cur.split(',').map(s => s.trim()).filter(Boolean) : [];
+                            if (!tags.includes(tag)) {{
+                                tags.push(tag);
+                                document.getElementById(inputId).value = tags.join(', ');
+                            }}
+                        }};
+                        container.appendChild(btn);
+                    }});
+                }});
+
+                // Store current trade ID for save
+                document.getElementById('tagModal')._tradeId = tradeId;
+                document.getElementById('tagModal').style.display = 'flex';
+            }}
+
+            function closeTagModal() {{
+                document.getElementById('tagModal').style.display = 'none';
+            }}
+
+            function saveTagEntry() {{
+                const tradeId = document.getElementById('tagModal')._tradeId;
+                if (!tradeId) return;
+                const entryTag = document.getElementById('entryTagInput').value.trim();
+                const exitTag = document.getElementById('exitTagInput').value.trim();
+                const note = document.getElementById('noteInput').value.trim();
+
+                // Update in-memory tags
+                if (entryTag || exitTag || note) {{
+                    dailyTags[tradeId] = {{ entry_tag: entryTag, exit_tag: exitTag, note: note }};
+                }} else {{
+                    delete dailyTags[tradeId];
+                }}
+
+                // Save custom presets from comma-separated tags
+                try {{
+                    const extractTags = (str) => str ? str.split(',').map(s => s.trim()).filter(Boolean) : [];
+                    const allEntry = extractTags(entryTag);
+                    const allExit = extractTags(exitTag);
+                    const stdPresets = ['Momentum', 'Breakout', 'Reversal', 'News', 'Scalp', 'Swing', 'Pullback', 'Trend Follow', 'Fade', 'Gap', 'VWAP', 'Support', 'Resistance'];
+                    const isCustom = t => !stdPresets.includes(t);
+
+                    const saveCustom = (key, tags) => {{
+                        let existing = [];
+                        try {{ existing = JSON.parse(localStorage.getItem(key) || '[]'); }} catch(e) {{}}
+                        tags.filter(isCustom).forEach(t => {{ if (!existing.includes(t)) existing.push(t); }});
+                        if (existing.length > 30) existing = existing.slice(-30);
+                        localStorage.setItem(key, JSON.stringify(existing));
+                    }};
+                    saveCustom('customEntryPresets', allEntry);
+                    saveCustom('customExitPresets', allExit);
+                }} catch(e) {{}}
+
+                // Update localStorage backup
+                try {{ localStorage.setItem('tradingTags', JSON.stringify(dailyTags)); }} catch(e) {{}}
+
+                // Recompute tag metrics from live data
+                refreshTagMetrics();
+
+                closeTagModal();
+                // Re-render current views
+                if (selectedDayKey) renderDaily();
+                if (currentView === 'ratios') renderRatios();
+            }}
+
+            function refreshTagMetrics() {{
+                // Rebuild tag data per month from dailyData + dailyTags
+                const byMonth = {{}};
+                for (const [dayKey, dayData] of Object.entries(dailyData)) {{
+                    if (!dayData || !dayData.trades) continue;
+                    const monthKey = dayKey.substring(0, 7);
+                    if (!byMonth[monthKey]) byMonth[monthKey] = {{}};
+                    dayData.trades.forEach(t => {{
+                        const tid = t.trade_id || '';
+                        const tagData = dailyTags[tid] || {{}};
+                        const entryTagRaw = tagData.entry_tag || t.entry_tag || t.tag || '';
+                        const entryTags = entryTagRaw ? entryTagRaw.split(',').map(s => s.trim()).filter(Boolean) : [];
+                        const tagNames = entryTags.length > 0 ? entryTags : ['Untagged'];
+                        const tradeInfo = {{
+                            symbol: t.symbol,
+                            dir: t.type,
+                            qty: t.quantity,
+                            entry: t.entry,
+                            exit: t.exit,
+                            pl: t.pl,
+                            date: t.close_date,
+                            exit_tag: tagData.exit_tag || t.exit_tag || '',
+                            note: tagData.note || t.note || ''
+                        }};
+                        // Add trade to each of its tags
+                        tagNames.forEach(tagName => {{
+                            if (!byMonth[monthKey][tagName]) byMonth[monthKey][tagName] = [];
+                            byMonth[monthKey][tagName].push(tradeInfo);
+                        }});
+                    }});
+                }}
+
+                // Update monthlyGainLoss tags
+                for (const [monthKey, tagMap] of Object.entries(byMonth)) {{
+                    if (!monthlyGainLoss[monthKey]) continue;
+                    const newTags = [];
+                    for (const [tagName, trades] of Object.entries(tagMap)) {{
+                        const count = trades.length;
+                        const wins = trades.filter(t => t.pl > 0);
+                        const winRate = count > 0 ? (wins.length / count * 100) : 0;
+                        const totalPl = trades.reduce((sum, t) => sum + t.pl, 0);
+                        const avgPl = count > 0 ? totalPl / count : 0;
+                        trades.sort((a, b) => a.date.localeCompare(b.date));
+                        newTags.push({{
+                            tag: tagName,
+                            count: count,
+                            win_rate: winRate,
+                            avg_pl: avgPl,
+                            trades: trades
+                        }});
+                    }}
+                    newTags.sort((a, b) => b.count - a.count);
+                    monthlyGainLoss[monthKey].tags = newTags;
+                }}
+            }}
+
+            function saveTagsToFile() {{
+                const jsonStr = JSON.stringify(dailyTags, null, 2);
+                // Try to save via local server first (more automatic)
+                if (window.location.protocol === 'http:' || window.location.protocol === 'https:') {{
+                    fetch('/save-tags', {{
+                        method: 'POST',
+                        headers: {{ 'Content-Type': 'application/json' }},
+                        body: jsonStr
+                    }}).then(r => r.json()).then(data => {{
+                        if (data.ok) {{
+                            showSaveToast('Tags saved!');
+                        }} else {{
+                            downloadTagsFile(jsonStr);
+                        }}
+                    }}).catch(() => downloadTagsFile(jsonStr));
+                }} else {{
+                    downloadTagsFile(jsonStr);
+                }}
+                try {{ localStorage.setItem('tradingTags', JSON.stringify(dailyTags)); }} catch(e) {{}}
+            }}
+
+            function downloadTagsFile(jsonStr) {{
+                const blob = new Blob([jsonStr], {{type: 'application/json'}});
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = 'tags.json';
+                a.click();
+                URL.revokeObjectURL(url);
+                showSaveToast('tags.json downloaded — place it in Reportes_Brokers/');
+            }}
+
+            function showSaveToast(msg) {{
+                const toast = document.createElement('div');
+                toast.innerText = msg;
+                toast.style.cssText = 'position:fixed; bottom:2rem; right:2rem; background:#00d4ff; color:#000; padding:0.75rem 1.5rem; border-radius:12px; font-weight:600; z-index:99999; animation:fadeOut 2s forwards;';
+                document.body.appendChild(toast);
+                setTimeout(() => toast.remove(), 2500);
+            }}
+
+            // Restore tags from localStorage on load (survives page refreshes without re-download)
+            try {{
+                const saved = localStorage.getItem('tradingTags');
+                if (saved) {{
+                    const parsed = JSON.parse(saved);
+                    Object.assign(dailyTags, parsed);
+                    // Recompute tag metrics with restored tags
+                    setTimeout(refreshTagMetrics, 100);
+                }}
+            }} catch(e) {{}}
+
+            function renderDailyEquityChart(dayKey) {{
+                const ctx = document.getElementById('dailyEquityChart').getContext('2d');
+                if(dailyChartInstance) dailyChartInstance.destroy();
+                const data = dailyEquityData[dayKey] || {{labels: [], data: []}};
+                dailyChartInstance = new Chart(ctx, {{
+                    type: 'line',
+                    data: {{ labels: data.labels, datasets: [{{ label: 'Day Equity', data: data.data, borderColor: '#a855f7', backgroundColor: 'rgba(168, 85, 247, 0.1)', borderWidth: 2, pointRadius: 2, fill: true, tension: 0.1 }}] }},
+                    options: {{ responsive: true, maintainAspectRatio: false, plugins: {{ legend: {{ display: false }} }}, scales: {{ x: {{ display:false }}, y: {{ grid: {{ color: '#334155' }}, ticks: {{ color: '#94a3b8' }} }} }} }} 
+                }});
+            }}
+
+            function renderGainLossStats(monthKey) {{
+                const fmt = (val) => val === undefined ? '-' : '$' + val.toLocaleString(undefined, {{minimumFractionDigits: 2, maximumFractionDigits: 2}});
+                const fmtPct = (val) => val === undefined ? '-' : val.toFixed(2) + '%';
+                document.getElementById('glStatsMonthLabel').innerText = `(${{monthKey}})`;
+                const stats = monthlyGainLoss[monthKey];
+                const types = ['won','lost'];
+                ['gl_streak_win','gl_streak_loss'].forEach(id => document.getElementById(id).innerText = '-');
+                if(!stats) {{ types.forEach(t=>{{ document.getElementById('gl_total_'+t).innerText='-'; document.getElementById('gl_avg_'+t).innerText='-'; document.getElementById('gl_pct_'+t).innerText='-'; document.getElementById('gl_count_'+t).innerText='-'; }}); return; }}
+                types.forEach(t => {{ const s = stats[t]; document.getElementById('gl_total_'+t).innerText = fmt(s.total_pl); document.getElementById('gl_avg_'+t).innerText = fmt(s.avg_pl); document.getElementById('gl_pct_'+t).innerText = fmtPct(s.avg_pct); document.getElementById('gl_count_'+t).innerText = s.count; }});
+                const adv = stats.advanced;
+                if(adv) {{
+                    document.getElementById('gl_streak_win').innerHTML = `<div class="positive">${{adv.max_consec_wins}} <span style="font-size:0.7rem; color:var(--text-secondary)">(${{adv.max_consec_wins_dates}})</span></div>`;
+                    document.getElementById('gl_streak_loss').innerHTML = `<div class="negative">${{adv.max_consec_losses}} <span style="font-size:0.7rem; color:var(--text-secondary)">(${{adv.max_consec_losses_dates}})</span></div>`;
+                }}
+                if(stats.expenses !== undefined) {{
+                    document.getElementById('gl_expenses').innerText = '$' + stats.expenses.toLocaleString(undefined, {{minimumFractionDigits: 2, maximumFractionDigits: 2}});
+                }}
+            }}
+
+            function renderMonthlyTickers(monthKey) {{
+                const tbody = document.querySelector('#monthlyTickersTable tbody');
+                tbody.innerHTML = '';
+                document.getElementById('tickerMonthLabel').innerText = `(${{monthKey}})`;
+                const symbols = monthlySymbols[monthKey] || [];
+                if (symbols.length === 0) {{ tbody.innerHTML = '<tr><td colspan="3">No Data</td></tr>'; return; }}
+                symbols.forEach(s => {{ const row = document.createElement('tr'); const plClass = s.pnl >= 0 ? 'positive' : 'negative'; row.innerHTML = `<td style="font-weight:bold; color:#60a5fa;">${{s.symbol}}</td><td>${{s.count}}</td><td class="${{plClass}}">$${{Math.abs(s.pnl).toLocaleString(undefined, {{minimumFractionDigits: 2, maximumFractionDigits: 2}})}}</td>`; tbody.appendChild(row); }});
+            }}
+
+            function createEmptyCell() {{ const d=document.createElement('div'); d.className='day-cell empty'; return d; }}
+            
+            function renderRatios() {{
+                const year = currentDate.getFullYear();
+                const month = currentDate.getMonth();
+                const monthKey = `${{year}}-${{String(month + 1).padStart(2, '0')}}`;
+                const monthName = monthNames[month];
+                document.getElementById('ratiosTitle').innerText = `${{monthName}} ${{year}}`;
+                
+                const container = document.getElementById('ratiosGrid');
+                container.innerHTML = '';
+                
+                const basicStats = monthlyStats[monthKey];
+                const stats = monthlyGainLoss[monthKey];
+                
+                if(!basicStats || !stats) {{ container.innerHTML = '<div class="card">No Data</div>'; return; }}
+                
+                const mkCard = (title, val, cls='') => `<div class="card" style="height: 80px; padding: 0.5rem; display: flex; flex-direction: column; overflow: hidden; position: relative;"><div class="card-title" style="margin-bottom:0; position:relative; z-index:10;">${{title}}</div><div class="card-value ${{cls}}" style="flex-grow: 1; display: flex; align-items: center; justify-content: flex-start; font-size: 1.5rem; position:relative; z-index:10;">${{val}}</div></div>`;
+                const adv = stats.advanced;
+                
+                let html = '';
+                const netPl = stats.all ? stats.all.total_pl : 0;
+                const netPlCls = netPl >= 0 ? 'positive' : 'negative';
+                html += mkCard('Net Profit', '$' + netPl.toLocaleString(undefined, {{minimumFractionDigits: 2, maximumFractionDigits: 2}}), netPlCls);
+                
+                const totalTrades = stats.all ? stats.all.count : 0;
+                html += mkCard('Total Trades', totalTrades);
+                
+                const winCount = stats.won ? stats.won.count : 0;
+                const lossCount = stats.lost ? stats.lost.count : 0;
+                
+                let winValuesRatio = "N/A";
+                if (lossCount > 0) {{
+                    const ratio = winCount / lossCount;
+                    winValuesRatio = ratio.toFixed(2) + ":1";
+                }} else if (winCount > 0) {{
+                    winValuesRatio = winCount + ":0";
+                }}
+                
+                html += mkCard('Win Rate (W:1)', winValuesRatio);
+                
+                if (adv) {{
+                    const avgWin = adv.avg_win || 0;
+                    const avgLoss = Math.abs(adv.avg_loss || 0);
+                    const wlDollarRatio = avgLoss > 0 ? (avgWin / avgLoss) : 0;
+                    const wlCls = wlDollarRatio >= 1 ? 'positive' : 'negative';
+                    const wlVal = '$' + wlDollarRatio.toFixed(2) + ':1';
+                    html += mkCard('Avg Win / Loss', wlVal, wlCls);
+                }}
+                
+                const winPct = totalTrades > 0 ? (winCount / totalTrades * 100) : 0.0;
+                const lossPct = totalTrades > 0 ? (lossCount / totalTrades * 100) : 0.0;
+                
+                html += mkCard('Winning Trades', `${{winCount}} <span style="font-size:0.9rem; margin-left: 12px;">(${{winPct.toFixed(2)}}%)</span>`, 'positive');
+                html += mkCard('Losing Trades', `${{lossCount}} <span style="font-size:0.9rem; margin-left: 12px;">(${{lossPct.toFixed(2)}}%)</span>`, 'negative');
+                
+                // Replaced Profit Factor with Long/Short Chart
+                // Adjusted height to be more compact (80px to match standard cards)
+                html += '<div class="card" style="height: 80px; padding: 0.5rem; display: flex; flex-direction: column;"><div class="card-title" style="margin-bottom: 0.25rem;">Long vs Short</div><div class="chart-container" style="flex-grow: 1; height: 0; min-height: 0; position: relative;"><canvas id="longShortChart"></canvas></div></div>';
+                
+                if(adv) {{
+                    
+                    
+                    const gpVal = adv.gain_to_pain;
+                    const gpCls = gpVal >= 1 ? 'positive' : 'negative';
+                    const gpDisplay = gpVal === Infinity ? 'Inf' : gpVal.toFixed(2) + ':1';
+                    html += mkCard('Gain / Pain Ratio', gpDisplay, gpCls);
+                    
+                    html += mkCard('Expectancy', '$'+adv.expectancy.toLocaleString(undefined, {{minimumFractionDigits: 2, maximumFractionDigits: 2}}), adv.expectancy>=0?'positive':'negative');
+                    html += mkCard('Max Drawdown', '$'+adv.max_dd.toLocaleString(undefined, {{minimumFractionDigits: 2, maximumFractionDigits: 2}}), 'negative');
+                    html += mkCard('Max Consec Wins', adv.max_consec_wins, 'positive');
+                    html += mkCard('Max Consec Losses', adv.max_consec_losses, 'negative');
+
+                    // --- NEW RATIOS FROM MARKDOWN ---
+                    html += '<div style="grid-column: 1 / -1; margin-top: 1rem; border-top: 1px solid var(--border-color); padding-top: 1rem;"><h3 style="color: var(--accent-primary); font-size: 0.9rem;">Advanced Performance Ratios</h3></div>';
+                    
+                    // Core Performance
+                    html += mkCard('Edge Score', adv.edge_score.toFixed(2), adv.edge_score >= 0 ? 'positive' : 'negative');
+                    html += mkCard('Recovery Factor', adv.recovery_factor.toFixed(2), adv.recovery_factor >= 1.5 ? 'positive' : '');
+                    html += mkCard('Payoff Ratio', adv.payoff_ratio.toFixed(2) + ':1', adv.payoff_ratio >= 1.5 ? 'positive' : '');
+                    html += mkCard('Calmar Ratio', adv.calmar.toFixed(2), adv.calmar >= 1.5 ? 'positive' : '');
+                    
+                    // Risk Adjusted
+                    html += mkCard('Sharpe Ratio', adv.sharpe.toFixed(2), adv.sharpe >= 1 ? 'positive' : '');
+                    html += mkCard('Sortino Ratio', adv.sortino.toFixed(2), adv.sortino >= 1 ? 'positive' : '');
+                    html += mkCard('SQN', adv.sqn.toFixed(2), adv.sqn >= 2 ? 'positive' : '');
+                    html += mkCard('Consistency Ratio', adv.consistency_ratio.toFixed(2), adv.consistency_ratio >= 0.1 ? 'positive' : '');
+                    html += mkCard('Z-Score', adv.z_score.toFixed(2), Math.abs(adv.z_score) >= 1.96 ? 'positive' : '');
+                    
+                    // Efficiency
+                    html += mkCard('Profit Factor (L)', adv.pf_long === Infinity ? 'Inf' : adv.pf_long.toFixed(2), adv.pf_long >= 1 ? 'positive' : 'negative');
+                    html += mkCard('Profit Factor (S)', adv.pf_short === Infinity ? 'Inf' : adv.pf_short.toFixed(2), adv.pf_short >= 1 ? 'positive' : 'negative');
+                    html += mkCard('Win Rate (L)', adv.wr_long.toFixed(1) + '%', adv.wr_long >= 50 ? 'positive' : '');
+                    html += mkCard('Win Rate (S)', adv.wr_short.toFixed(1) + '%', adv.wr_short >= 50 ? 'positive' : '');
+                    html += mkCard('Trades per Day', adv.trades_per_day.toFixed(1));
+
+                    // Drawdown & Recovery
+                    html += mkCard('Max DD Duration', adv.max_dd_duration + ' Days', 'negative');
+                    html += mkCard('Equity Peak', '$' + adv.equity_peak.toLocaleString(undefined, {{maximumFractionDigits: 0}}), 'positive');
+                    
+                    // Streaks & Consistency
+                    html += mkCard('Std Dev P&L', '$' + adv.std_dev.toLocaleString(undefined, {{maximumFractionDigits: 0}}));
+                    html += mkCard('Standard Error', adv.standard_error.toFixed(2));
+                    html += mkCard('T-Score', adv.t_score.toFixed(2), adv.t_score >= 2 ? 'positive' : '');
+
+                    // Time Analysis
+                    html += mkCard('Avg Time Win', adv.avg_time_win.toFixed(1) + ' Days');
+
+                    // Capital Allocation
+                    html += mkCard('Kelly Criterion', adv.kelly.toFixed(2) + '%', adv.kelly > 0 ? 'positive' : 'negative');
+                }}
+                
+                // New KPIs requested
+                if (stats.traded_days !== undefined) {{
+                    html += mkCard('Traded Days', stats.traded_days);
+                    html += mkCard('Trading Commissions', '$' + basicStats.fees.toLocaleString(undefined, {{minimumFractionDigits: 2, maximumFractionDigits: 2}}), 'negative');
+                    html += mkCard('Fixed Expenses', '$' + stats.expenses.toLocaleString(undefined, {{minimumFractionDigits: 2, maximumFractionDigits: 2}}), 'negative');
+                    const avgDailyCls = stats.avg_daily_pl >= 0 ? 'positive' : 'negative';
+                    html += mkCard('Avg Daily P&L', '$' + stats.avg_daily_pl.toLocaleString(undefined, {{minimumFractionDigits: 2, maximumFractionDigits: 2}}), avgDailyCls);
+                }}
+
+                if(stats.tags && stats.tags.length > 0) {{
+                    html += '<div style="grid-column: 1 / -1; margin-top: 2rem; display: grid; grid-template-columns: 2fr 1fr; gap: 1rem;">';
+
+                    // Tag Performance Table (2/3 width) — expandable
+                    html += '<div>';
+                    html += '<h3 style="margin-bottom: 1rem; color: var(--text-secondary);">Tag Performance</h3>';
+                    html += '<div class="card" style="padding: 0; overflow: hidden;">';
+                    html += '<table style="width: 100%; text-align: left;">';
+                    html += '<thead><tr><th>Tag</th><th>Count</th><th>Win Rate</th><th>Avg P&L</th></tr></thead>';
+                    html += '<tbody>';
+                    stats.tags.forEach((t, i) => {{
+                        const winRateCls = t.win_rate >= 50 ? 'positive' : (t.win_rate < 40 ? 'negative' : '');
+                        const avgPlCls = t.avg_pl >= 0 ? 'positive' : 'negative';
+                        const tagId = 'tag_' + i + '_' + monthKey;
+                        html += `<tr style="cursor:pointer;" onclick="document.getElementById('${{tagId}}').style.display = document.getElementById('${{tagId}}').style.display === 'none' ? '' : 'none'">
+                            <td style="font-weight: 600; color:#60a5fa;">&#9654; ${{t.tag}}</td>
+                            <td>${{t.count}}</td>
+                            <td class="${{winRateCls}}">${{t.win_rate.toFixed(2)}}%</td>
+                            <td class="${{avgPlCls}}">$${{t.avg_pl.toLocaleString(undefined, {{minimumFractionDigits: 2, maximumFractionDigits: 2}})}}</td>
+                        </tr>`;
+                        // Expandable trades list
+                        html += `<tr id="${{tagId}}" style="display:none;"><td colspan="4" style="padding:0; background:rgba(0,0,0,0.3);">
+                            <table style="width:100%; font-size:0.8rem; margin:0;">
+                                <thead><tr style="color:var(--text-secondary);">
+                                    <th>Symbol</th><th>Dir</th><th>Qty</th><th>Entry</th><th>Exit</th><th>P&L</th><th>Exit Tag</th><th>Note</th>
+                                </tr></thead>
+                                <tbody>`;
+                        (t.trades || []).forEach(tr => {{
+                            const plCls = tr.pl >= 0 ? 'positive' : 'negative';
+                            html += `<tr>
+                                <td style="font-weight:bold; color:#60a5fa;">${{tr.symbol}}</td>
+                                <td>${{tr.dir}}</td>
+                                <td>${{tr.qty}}</td>
+                                <td>$${{tr.entry.toFixed(4)}}</td>
+                                <td>$${{tr.exit.toFixed(4)}}</td>
+                                <td class="${{plCls}}">$${{tr.pl.toFixed(2)}}</td>
+                                <td style="color:#94a3b8;">${{tr.exit_tag || '-'}}</td>
+                                <td style="color:#94a3b8;">${{tr.note || '-'}}</td>
+                            </tr>`;
+                        }});
+                        html += '</tbody></table></td></tr>';
+                    }});
+                    html += '</tbody></table></div></div>';
+                    
+                    // Weekday Performance Table (1/3 width)
+                    if (stats.weekdays) {{
+                        html += '<div>';
+                        html += '<h3 style="margin-bottom: 1rem; color: var(--text-secondary);">Weekday Performance</h3>';
+                        html += '<div class="card" style="padding: 0; overflow: hidden; height: 100%;">';
+                        html += '<table style="width: 100%; text-align: left;">';
+                        html += '<thead><tr><th>Day</th><th>Count</th><th>Total P&L</th><th>Win Rate</th></tr></thead>';
+                        html += '<tbody>';
+                        stats.weekdays.forEach(d => {{
+                            const totalPlCls = d.total_pl >= 0 ? 'positive' : 'negative';
+                            const winRateCls = d.win_rate >= 50 ? 'positive' : (d.win_rate < 40 ? 'negative' : '');
+                            html += `<tr>
+                                <td style="font-weight: 600;">${{d.day_name}}</td>
+                                <td>${{d.count}}</td>
+                                <td class="${{totalPlCls}}">$${{d.total_pl.toLocaleString(undefined, {{minimumFractionDigits: 0, maximumFractionDigits: 0}})}}</td>
+                                <td class="${{winRateCls}}">${{d.win_rate.toFixed(1)}}%</td>
+                            </tr>`;
+                        }});
+                        html += '</tbody></table></div></div>';
+                    }}
+                    
+                    html += '</div>'; // End grid container
+                }}
+                
+                container.innerHTML = html;
+                
+                // Render Chart
+                if (typeof Chart !== 'undefined' && basicStats) {{
+                    const ctx = document.getElementById('longShortChart').getContext('2d');
+                    if (longShortChartInstance) longShortChartInstance.destroy();
+                    
+                    const total = basicStats.long_count + basicStats.short_count;
+                    const longPct = total > 0 ? (basicStats.long_count / total * 100).toFixed(1) + '%' : '0%';
+                    const shortPct = total > 0 ? (basicStats.short_count / total * 100).toFixed(1) + '%' : '0%';
+                    
+                    longShortChartInstance = new Chart(ctx, {{
+                        type: 'doughnut',
+                        data: {{
+                            labels: [`Long (${{longPct}})`, `Short (${{shortPct}})`],
+                            datasets: [{{
+                                data: [basicStats.long_count, basicStats.short_count],
+                                backgroundColor: ['#10b981', '#ef4444'], // Green for Long, Red for Short
+                                borderWidth: 0
+                            }}]
+                        }},
+                        options: {{
+                            responsive: true,
+                            maintainAspectRatio: false,
+                            plugins: {{
+                                legend: {{ position: 'right', labels: {{ color: '#94a3b8', boxWidth: 10, font: {{ size: 10 }} }} }}
+                            }},
+                             cutout: '50%'
+                        }}
+                    }});
+                }}
+            }}
+
+            function appendWeeklyTotal(grid, pnl) {{ const d=document.createElement('div'); d.className='week-total'; d.innerHTML = `<div class="week-label">Week</div><div class="${{pnl>=0?'positive':'negative'}}" style="font-weight:700;">$${{Math.abs(pnl).toLocaleString(undefined, {{minimumFractionDigits: 2, maximumFractionDigits: 2}})}}</div>`; grid.appendChild(d); }}
+            function toggleCustomizer() {{
+                const sidebar = document.getElementById('customizerSidebar');
+                if (sidebar.style.right === '0px') {{
+                    sidebar.style.right = '-400px';
+                }} else {{
+                    sidebar.style.right = '0px';
+                }}
+            }}
+
+            function updateAccent(color) {{
+                document.documentElement.style.setProperty('--accent-primary', color);
+                document.documentElement.style.setProperty('--border-color', color + '4D'); // 30% alpha
+                document.documentElement.style.setProperty('--accent-primary-dim', color + '26'); // 15% alpha
+                document.getElementById('accentHex').innerText = color.toUpperCase();
+                document.getElementById('accentPicker').value = color;
+                
+                // Update dynamic shadows
+                document.documentElement.style.setProperty('--border-glow', `0 0 10px ${{color}}33, inset 0 0 10px ${{color}}1A`);
+                
+                localStorage.setItem('midge_theme_accent', color);
+            }}
+
+            function applyPreset(color) {{
+                updateAccent(color);
+            }}
+
+            function updateGrid(val) {{
+                const alpha = (val / 100).toFixed(2);
+                const bgSVG = document.querySelector('.circuit-bg');
+                if (bgSVG) bgSVG.style.opacity = alpha;
+                
+                // Update CSS var for other things that might use it
+                const color = getComputedStyle(document.documentElement).getPropertyValue('--accent-primary').trim();
+                document.documentElement.style.setProperty('--accent-primary-dim', color + Math.round(val * 2.55).toString(16).padStart(2, '0'));
+                localStorage.setItem('midge_theme_grid', val);
+            }}
+
+            function updateMode(mode) {{
+                if (mode === 'light') {{
+                    document.documentElement.style.setProperty('--bg-color', '#f1f5f9');
+                    document.documentElement.style.setProperty('--card-bg', 'rgba(255, 255, 255, 0.8)');
+                    document.documentElement.style.setProperty('--text-primary', '#0f172a');
+                    document.documentElement.style.setProperty('--text-secondary', '#64748b');
+                    document.getElementById('modeLight').classList.add('active');
+                    document.getElementById('modeDark').classList.remove('active');
+                }} else {{
+                    document.documentElement.style.setProperty('--bg-color', '#030712');
+                    document.documentElement.style.setProperty('--card-bg', 'rgba(3, 7, 18, 0.7)');
+                    document.documentElement.style.setProperty('--text-primary', '#e2e8f0');
+                    document.documentElement.style.setProperty('--text-secondary', '#94a3b8');
+                    document.getElementById('modeDark').classList.add('active');
+                    document.getElementById('modeLight').classList.remove('active');
+                }}
+                localStorage.setItem('midge_theme_mode', mode);
+            }}
+
+            function resetTheme() {{
+                localStorage.removeItem('midge_theme_accent');
+                localStorage.removeItem('midge_theme_grid');
+                localStorage.removeItem('midge_theme_mode');
+                location.reload();
+            }}
+
+            // Load saved theme
+            window.addEventListener('DOMContentLoaded', () => {{
+                const savedAccent = localStorage.getItem('midge_theme_accent');
+                const savedGrid = localStorage.getItem('midge_theme_grid');
+                const savedMode = localStorage.getItem('midge_theme_mode');
+
+                if (savedAccent) updateAccent(savedAccent);
+                if (savedGrid) {{
+                    document.getElementById('gridSlider').value = savedGrid;
+                    updateGrid(savedGrid);
+                }}
+                if (savedMode) updateMode(savedMode);
+            }});
+
+            function changeMonth(delta) {{ 
+                currentDate.setMonth(currentDate.getMonth() + delta); 
+                if(currentView === 'monthly') renderCalendar();
+                if(currentView === 'ratios') renderRatios();
+            }}
+        }} catch(e) {{
+            console.error(e);
+            alert('Error loading dashboard: ' + e.message);
+        }}
+        // Laser scan bar effect on KPI cards
+        document.addEventListener('mouseover', function (e) {{
+            var card = e.target.closest('.card, .month-card');
+            if (card && !card.querySelector('.chart-container')) {{
+                var old = card.querySelector('.laser-bar');
+                if (old) return;
+                var bar = document.createElement('div');
+                bar.className = 'laser-bar';
+                card.appendChild(bar);
+                setTimeout(function () {{ bar.remove(); }}, 700);
+            }}
+        }});
+    </script>
+
+    <!-- Circuit Board Background JS -->
+    <script>
+        (function () {{
+            const canvas = document.getElementById('circuit-bg');
+            const ctx = canvas.getContext('2d');
+
+            // Will dynamically get the primary accent color
+            let accentRGB = '0, 212, 255'; 
+
+            const GRID = 30;
+            let W, H, cols, rows, nodes, pulses;
+
+            function hexToRgb(hex) {{
+                var result = /^#?([a-f\\d]{2})([a-f\\d]{2})([a-f\\d]{2})$/i.exec(hex);
+                return result ? `${{parseInt(result[1], 16)}}, ${{parseInt(result[2], 16)}}, ${{parseInt(result[3], 16)}}` : null;
+            }}
+
+            function updateAccentColor() {{
+                const hex = getComputedStyle(document.documentElement).getPropertyValue('--accent-primary').trim();
+                const rgb = hexToRgb(hex);
+                if (rgb) accentRGB = rgb;
+            }}
+
+            function resize() {{
+                W = canvas.width = window.innerWidth;
+                H = canvas.height = window.innerHeight;
+                cols = Math.ceil(W / GRID) + 1;
+                rows = Math.ceil(H / GRID) + 1;
+                buildGraph();
+            }}
+
+            function buildGraph() {{
+                nodes = [];
+                pulses = [];
+
+                for (let c = 0; c < cols; c++) {{
+                    for (let r = 0; r < rows; r++) {{
+                        if (Math.random() < 0.18) {{
+                            nodes.push({{ x: c * GRID, y: r * GRID, col: c, row: r }});
+                        }}
+                    }}
+                }}
+
+                const edges = [];
+                for (let i = 0; i < nodes.length; i++) {{
+                    for (let j = i + 1; j < nodes.length; j++) {{
+                        const a = nodes[i], b = nodes[j];
+                        const dx = Math.abs(a.col - b.col), dy = Math.abs(a.row - b.row);
+                        if ((dx === 0 && dy <= 4) || (dy === 0 && dx <= 4)) {{
+                            if (Math.random() < 0.55) {{
+                                edges.push({{ a, b, segments: buildSegments(a, b) }});
+                            }}
+                        }}
+                    }}
+                }}
+
+                for (let i = 0; i < 12; i++) {{
+                    const e = edges[Math.floor(Math.random() * edges.length)];
+                    if (e) spawnPulse(e, edges);
+                }}
+
+                canvas._edges = edges;
+            }}
+
+            function buildSegments(a, b) {{
+                const mid = {{ x: b.x, y: a.y }};
+                return [
+                    {{ x1: a.x, y1: a.y, x2: mid.x, y2: mid.y }},
+                    {{ x1: mid.x, y1: mid.y, x2: b.x, y2: b.y }}
+                ];
+            }}
+
+            function spawnPulse(edge, edges) {{
+                const totalLen = segLen(edge.segments[0]) + segLen(edge.segments[1]);
+                pulses.push({{
+                    edge,
+                    edges,
+                    t: 0,
+                    speed: 0.3 + Math.random() * 0.5,
+                    totalLen,
+                    alpha: 0.6 + Math.random() * 0.4
+                }});
+            }}
+
+            function segLen(s) {{ return Math.abs(s.x2 - s.x1) + Math.abs(s.y2 - s.y1); }}
+
+            function posAtT(segs, totalLen, t) {{
+                const dist = t;
+                const l0 = segLen(segs[0]);
+                if (dist <= l0) {{
+                    const f = dist / Math.max(l0, 0.001);
+                    return {{ x: segs[0].x1 + (segs[0].x2 - segs[0].x1) * f, y: segs[0].y1 + (segs[0].y2 - segs[0].y1) * f }};
+                }} else {{
+                    const f = (dist - l0) / Math.max(segLen(segs[1]), 0.001);
+                    return {{ x: segs[1].x1 + (segs[1].x2 - segs[1].x1) * Math.min(f, 1), y: segs[1].y1 + (segs[1].y2 - segs[1].y1) * Math.min(f, 1) }};
+                }}
+            }}
+
+            function draw() {{
+                updateAccentColor();
+                const C_COLOR = `rgba(${{accentRGB}},`;
+
+                ctx.clearRect(0, 0, W, H);
+                const edges = canvas._edges || [];
+
+                ctx.lineWidth = 1;
+                for (const e of edges) {{
+                    ctx.strokeStyle = C_COLOR + '0.07)';
+                    ctx.beginPath();
+                    for (const s of e.segments) {{
+                        ctx.moveTo(s.x1, s.y1);
+                        ctx.lineTo(s.x2, s.y2);
+                    }}
+                    ctx.stroke();
+                }}
+
+                for (const n of nodes) {{
+                    ctx.beginPath();
+                    ctx.arc(n.x, n.y, 1.5, 0, Math.PI * 2);
+                    ctx.fillStyle = C_COLOR + '0.18)';
+                    ctx.fill();
+                }}
+
+                const alive = [];
+                for (const p of pulses) {{
+                    p.t += p.speed;
+
+                    if (p.t > p.totalLen + 12) {{
+                        if (Math.random() < 0.7) {{
+                            const e = edges[Math.floor(Math.random() * edges.length)];
+                            if (e) spawnPulse(e, edges);
+                        }}
+                        continue;
+                    }}
+
+                    alive.push(p);
+
+                    const trailLen = 24;
+                    for (let step = trailLen; step >= 0; step--) {{
+                        const tt = p.t - step;
+                        if (tt < 0 || tt > p.totalLen) continue;
+                        const pos = posAtT(p.edge.segments, p.totalLen, tt);
+                        const fade = (1 - step / trailLen) * p.alpha;
+                        ctx.beginPath();
+                        ctx.arc(pos.x, pos.y, step === 0 ? 2.5 : 1, 0, Math.PI * 2);
+                        ctx.fillStyle = C_COLOR + (fade * 0.85).toFixed(3) + ')';
+                        ctx.fill();
+                    }}
+
+                    if (p.t <= p.totalLen) {{
+                        const head = posAtT(p.edge.segments, p.totalLen, p.t);
+                        ctx.beginPath();
+                        ctx.arc(head.x, head.y, 2.5, 0, Math.PI * 2);
+                        ctx.fillStyle = C_COLOR + p.alpha.toFixed(2) + ')';
+                        ctx.shadowBlur = 8;
+                        ctx.shadowColor = C_COLOR + '1)';
+                        ctx.fill();
+                        ctx.shadowBlur = 0;
+                    }}
+                }}
+
+                pulses = alive;
+
+                if (pulses.length < 8 && edges.length > 0) {{
+                    const e = edges[Math.floor(Math.random() * edges.length)];
+                    if (e) spawnPulse(e, edges);
+                }}
+
+                requestAnimationFrame(draw);
+            }}
+
+            window.addEventListener('resize', resize);
+            resize();
+            draw();
+        }})();
+    </script>
+</body>
+</html>
+"""
+    return html
+
+def main():
+    # Helper to deduplicate items choosing the maximum count found in any single file
+    def merge_item_counts(dir_path, process_func):
+        global_max_counts = collections.defaultdict(int)
+        if not os.path.exists(dir_path):
+            return []
+        
+        print(f"Scanning directory: {dir_path}...")
+        for filename in os.listdir(dir_path):
+            if filename.lower().endswith('.csv'):
+                filepath = os.path.join(dir_path, filename)
+                print(f"  Reading: {filename}...")
+                items = process_func(filepath)
+                
+                # Count frequencies in CURRENT file
+                file_counts = collections.Counter(items)
+                
+                # Update global record with the MAX frequency ever seen for each item
+                for item, count in file_counts.items():
+                    if count > global_max_counts[item]:
+                        global_max_counts[item] = count
+        
+        # Flatten back to a list
+        final_list = []
+        for item, count in global_max_counts.items():
+            final_list.extend([item] * count)
+        return final_list
+
+    # 1. Process Schwab executions
+    print("Processing Schwab executions...")
+    all_executions = merge_item_counts(SCHWAB_DIR, process_execution_trades)
+    print(f"Total deduplicated executions: {len(all_executions)}")
+    
+    print("Matching execution trades...")
+    closed_execution_trades = match_trades(all_executions)
+    print(f"Generated {len(closed_execution_trades)} closed trades from executions.")
+
+    # 2. Process Alaric reports (from PropReports)
+    print("Processing Alaric reports...")
+    all_alaric_trades = merge_item_counts(ALARIC_DIR, process_alaric_trades)
+    print(f"Total deduplicated Alaric trades: {len(all_alaric_trades)}")
+
+    # Combine all trades
+    all_closed_trades = closed_execution_trades + all_alaric_trades
+    print(f"Total overall closed trades: {len(all_closed_trades)}")
+
+    # Apply saved tags from tags.json
+    saved_tags = load_tags()
+    if saved_tags:
+        applied = 0
+        for t in all_closed_trades:
+            tid = t.trade_id
+            if tid in saved_tags:
+                tag_data = saved_tags[tid]
+                if isinstance(tag_data, str):
+                    # Legacy format: just a string tag
+                    t.entry_tag = tag_data
+                else:
+                    t.entry_tag = tag_data.get('entry_tag', '')
+                    t.exit_tag = tag_data.get('exit_tag', '')
+                    t.note = tag_data.get('note', '')
+                applied += 1
+        print(f"Applied saved tags to {applied} trades.")
+    
+    # 3. Process Expenses (Gastos)
+    print("Processing Expenses...")
+    all_expense_items = merge_item_counts(GASTOS_DIR, process_gastos)
+    
+    # Aggregated back to date -> total
+    expenses_data = collections.defaultdict(float)
+    for date_key, category, comment, amount in all_expense_items:
+        expenses_data[date_key] += amount
+    print(f"Total expense days after deduplication: {len(expenses_data)}.")
+
+    print("Generating report...")
+    html_content = generate_html_report(all_closed_trades, expenses_data)
+    try:
+        with open(OUTPUT_FILE, 'w', encoding='utf-8') as f:
+            f.write(html_content)
+        print(f"Success! Report saved to {OUTPUT_FILE}")
+    except Exception as e:
+        print(f"Error writing HTML: {e}")
+
+if __name__ == "__main__":
+    main()
+
