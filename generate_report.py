@@ -26,6 +26,10 @@ BASE_DIR = SCRIPT_DIR  # El script esta en la raiz del proyecto
 
 SCHWAB_DIR = os.path.join(BASE_DIR, 'Reports_Schwab')
 ALARIC_DIR = os.path.join(BASE_DIR, 'Reports_PropReports')
+METATRADER_DIR = os.path.join(BASE_DIR, 'Reports_MetaTrader')
+DAS_DIR = os.path.join(BASE_DIR, 'Reports_DAS')
+TOS_DIR = os.path.join(BASE_DIR, 'Reports_TOS')
+GENERIC_DIR = os.path.join(BASE_DIR, 'Reports_Generic')
 GASTOS_DIR = os.path.join(BASE_DIR, 'Reports_Gastos')
 OUTPUT_FILE = os.path.join(BASE_DIR, 'trading_report.html')
 TAGS_FILE = os.path.join(BASE_DIR, 'tags.json')
@@ -319,6 +323,333 @@ def process_alaric_trades(filepath):
         return []
     
     return trades
+
+def process_metatrader_trades(filepath):
+    """Parse MetaTrader 4/5 Account History CSV into ClosedTrade list."""
+    trades = []
+    try:
+        with open(filepath, 'r', encoding='utf-8-sig') as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                if not row.get('Item'): continue
+                item = row['Item'].strip()
+                # MT sometimes exports balance/credit rows — skip non-trading entries
+                if item.lower() in ('balance', 'credit', 'deposit', 'withdrawal', 'bonus', 'correction'):
+                    continue
+
+                # Parse dates: MT uses "YYYY.MM.DD HH:MM:SS" or "YYYY-MM-DD HH:MM:SS"
+                open_date = None
+                for fmt in ['%Y.%m.%d %H:%M:%S', '%Y-%m-%d %H:%M:%S',
+                            '%Y.%m.%d %H:%M', '%Y-%m-%d %H:%M',
+                            '%m/%d/%Y %H:%M:%S', '%m/%d/%Y %H:%M']:
+                    try:
+                        open_date = datetime.datetime.strptime(row.get('Open Time', '').strip(), fmt)
+                        break
+                    except ValueError:
+                        continue
+
+                close_date = None
+                for fmt in ['%Y.%m.%d %H:%M:%S', '%Y-%m-%d %H:%M:%S',
+                            '%Y.%m.%d %H:%M', '%Y-%m-%d %H:%M',
+                            '%m/%d/%Y %H:%M:%S', '%m/%d/%Y %H:%M']:
+                    try:
+                        close_date = datetime.datetime.strptime(row.get('Close Time', '').strip(), fmt)
+                        break
+                    except ValueError:
+                        continue
+
+                if not open_date or not close_date: continue
+
+                symbol = item
+                try: qty = abs(int(float(row.get('Size', '0'))))
+                except: qty = 0
+                if qty == 0: continue
+
+                try: entry = float(row.get('Price', '0'))
+                except: entry = 0.0
+                try: exit_price = float(row.get('Close Price', '0'))
+                except: exit_price = 0.0
+
+                # MT Type field: 'buy' = Long, 'sell' = Short
+                mt_type = row.get('Type', '').strip().lower()
+                direction = 'Long' if 'buy' in mt_type else 'Short'
+
+                # Fees: Commission + Swap + Taxes
+                try: commission = float(row.get('Commission', '0'))
+                except: commission = 0.0
+                try: swap = float(row.get('Swap', '0'))
+                except: swap = 0.0
+                try: taxes = float(row.get('Taxes', '0'))
+                except: taxes = 0.0
+                total_fees = abs(commission) + abs(swap) + abs(taxes)
+                # Entry and exit tag from MT Comment (optional)
+                mt_tag = row.get('Comment', '').strip()
+                ct = ClosedTrade(symbol, open_date, close_date, qty, entry, exit_price,
+                                total_fees, 0.0, direction, tag=mt_tag)
+                trades.append(ct)
+    except Exception as e:
+        print(f"Error reading MetaTrader CSV {filepath}: {e}")
+        return []
+    return trades
+
+
+def process_das_trades(filepath):
+    """Parse DAS Trader execution CSV into Trade list (needs FIFO matching)."""
+    trades = []
+    try:
+        with open(filepath, 'r', encoding='utf-8-sig') as f:
+            reader = csv.DictReader(f)
+            reader.fieldnames = [name.strip() for name in reader.fieldnames]
+            data_rows = list(reader)
+            data_rows.reverse()  # DAS exports most recent first
+
+            for row in data_rows:
+                side = row.get('Side', '').strip().upper()
+                if not side: continue
+
+                # Parse date: "MM/DD/YYYY" or "YYYY-MM-DD"
+                date_str = row.get('Date', '').strip()
+                date = None
+                for fmt in ['%m/%d/%Y', '%Y-%m-%d', '%m/%d/%y', '%d/%m/%Y']:
+                    try:
+                        date = datetime.datetime.strptime(date_str, fmt)
+                        break
+                    except ValueError:
+                        continue
+                if not date: continue
+
+                symbol = row.get('Symbol', '').strip()
+                try: qty = int(float(row.get('Quantity', '0')))
+                except: qty = 0
+                if qty == 0: continue
+
+                try: price = float(row.get('Price', '0'))
+                except: price = 0.0
+
+                # DAS fees: check 'Executed' or 'Commission' columns
+                fees = 0.0
+                for fee_col in ['Commission', 'Executed', 'Fees', 'SEC', 'TAF']:
+                    try: fees += abs(float(row.get(fee_col, '0')))
+                    except: pass
+
+                # Normalize action
+                if 'SHORT' in side and 'SELL' in side:
+                    action = 'Sell'
+                elif 'SHORT' in side:
+                    action = 'Sell'
+                elif 'COVER' in side:
+                    action = 'Buy'
+                elif 'BUY' in side:
+                    action = 'Buy'
+                elif 'SELL' in side:
+                    action = 'Sell'
+                else:
+                    action = 'Buy' if 'buy' in side.lower() else 'Sell'
+
+                trades.append(Trade(date, symbol, qty, price, action, fees))
+    except Exception as e:
+        print(f"Error reading DAS CSV {filepath}: {e}")
+        return []
+    return trades
+
+
+def process_tos_trades(filepath):
+    """Parse ThinkOrSwim CSV into Trade list (needs FIFO matching)."""
+    trades = []
+    try:
+        with open(filepath, 'r', encoding='utf-8-sig') as f:
+            reader = csv.DictReader(f)
+            reader.fieldnames = [name.strip() for name in reader.fieldnames]
+            data_rows = list(reader)
+            data_rows.reverse()
+
+            for row in data_rows:
+                trans = row.get('TRANSACTION', row.get('Transaction', '')).strip()
+                if not trans: continue
+                trans_upper = trans.upper()
+
+                # Filter: only equity trades
+                if any(kw in trans_upper for kw in ['INTEREST', 'DIVIDEND', 'ACH', 'TRANSFER',
+                                                      'BALANCE', 'JOURNAL', 'ADJUSTMENT']):
+                    continue
+
+                # Parse date: "MM/DD/YYYY"
+                date = None
+                date_str = row.get('DATE', row.get('Date', '')).strip()
+                for fmt in ['%m/%d/%Y', '%m/%d/%y', '%Y-%m-%d']:
+                    try:
+                        date = datetime.datetime.strptime(date_str, fmt)
+                        break
+                    except ValueError:
+                        continue
+                if not date: continue
+
+                symbol = row.get('SYMBOL', row.get('Symbol', '')).strip()
+                if not symbol: continue
+
+                try: qty = int(float(row.get('QTY', row.get('Quantity', '0')).replace(',', '')))
+                except: qty = 0
+                if qty == 0: continue
+
+                try: price = float(row.get('PRICE', row.get('Price', '0')).replace('$', ''))
+                except: price = 0.0
+
+                # Fees
+                fees = 0.0
+                for fee_col in ['COMMISSION/FEE', 'COMMISSION', 'FEES', 'Commission/Fee', 'Comm']:
+                    try: fees += abs(float(row.get(fee_col, '0').replace('$', '')))
+                    except: pass
+
+                # Normalize action
+                if any(kw in trans_upper for kw in ['SELL SHORT', 'SHORT SELL', 'SOLD SHORT']):
+                    action = 'Sell'
+                elif any(kw in trans_upper for kw in ['BUY TO COVER', 'BOUGHT TO COVER', 'COVER']):
+                    action = 'Buy'
+                elif 'SELL' in trans_upper:
+                    action = 'Sell'
+                elif 'BUY' in trans_upper:
+                    action = 'Buy'
+                else:
+                    continue  # Skip unrecognized
+
+                trades.append(Trade(date, symbol, qty, price, action, fees))
+    except Exception as e:
+        print(f"Error reading ThinkOrSwim CSV {filepath}: {e}")
+        return []
+    return trades
+
+
+def process_generic_trades(filepath):
+    """Parse a generic CSV using a mapping.json in the same directory.
+
+    Returns list[Trade] for execution CSVs, list[ClosedTrade] for pre-matched CSVs.
+    The mapping.json should look like:
+    {
+        "type": "executions",
+        "date_col": "Date",
+        "date_format": "%m/%d/%Y",
+        "symbol_col": "Symbol",
+        "action_col": "Side",
+        "quantity_col": "Qty",
+        "price_col": "Price",
+        "fees_col": "Commission",
+        "net_pl_col": "P&L",
+        "buy_values": ["BUY"],
+        "sell_values": ["SELL"],
+        "direction_col": "Direction",
+        "long_values": ["Long", "LONG"],
+        "short_values": ["Short", "SHORT"]
+    }
+    or for matched trades directly:
+    {
+        "type": "matched",
+        "symbol_col": "Symbol",
+        "date_format": "%m/%d/%Y",
+        ...
+    }
+    If mapping.json is missing, raises an error suggesting the user create one.
+    """
+    import json as _json
+
+    dir_path = os.path.dirname(filepath)
+    mapping_path = os.path.join(dir_path, 'mapping.json')
+    if not os.path.exists(mapping_path):
+        raise FileNotFoundError(
+            f"No mapping.json found in {dir_path}. Create one to describe your CSV columns. "
+            f"See documentation for the format."
+        )
+
+    with open(mapping_path, 'r', encoding='utf-8') as mf:
+        mapping = _json.load(mf)
+
+    trade_type = mapping.get('type', 'executions')
+    date_col = mapping.get('date_col', 'Date')
+    date_fmt = mapping.get('date_format', '%m/%d/%Y')
+    symbol_col = mapping.get('symbol_col', 'Symbol')
+    qty_col = mapping.get('quantity_col', 'Qty')
+    price_col = mapping.get('price_col', 'Price')
+    fees_col = mapping.get('fees_col', '')
+
+    items = []
+    try:
+        with open(filepath, 'r', encoding='utf-8-sig') as f:
+            reader = csv.DictReader(f)
+            reader.fieldnames = [name.strip() for name in reader.fieldnames]
+
+            for row in reader:
+                # Parse date
+                date_str = row.get(date_col, '').strip()
+                date = None
+                for fmt in [date_fmt, '%m/%d/%Y', '%Y-%m-%d', '%m/%d/%y', '%d/%m/%Y']:
+                    try:
+                        date = datetime.datetime.strptime(date_str, fmt)
+                        break
+                    except ValueError:
+                        continue
+                if not date: continue
+
+                symbol = row.get(symbol_col, '').strip()
+                if not symbol: continue
+
+                try: qty = abs(int(float(row.get(qty_col, '0').replace(',', ''))))
+                except: qty = 0
+                if qty == 0: continue
+
+                try: price = float(row.get(price_col, '0').replace('$', '').replace(',', ''))
+                except: price = 0.0
+
+                # Fees
+                fees = 0.0
+                if fees_col:
+                    try: fees = abs(float(row.get(fees_col, '0').replace('$', '').replace(',', '')))
+                    except: pass
+
+                if trade_type == 'executions':
+                    action_col = mapping.get('action_col', 'Side')
+                    raw_action = row.get(action_col, '').strip()
+                    buy_vals = mapping.get('buy_values', ['BUY', 'Buy', 'buy'])
+                    sell_vals = mapping.get('sell_values', ['SELL', 'Sell', 'sell'])
+                    if raw_action in sell_vals:
+                        action = 'Sell'
+                    else:
+                        action = 'Buy'  # default
+                    items.append(Trade(date, symbol, qty, price, action, fees))
+
+                elif trade_type == 'matched':
+                    # For pre-matched trades
+                    dir_col = mapping.get('direction_col', 'Direction')
+                    long_vals = mapping.get('long_values', ['Long', 'LONG'])
+                    raw_dir = row.get(dir_col, 'Long').strip()
+                    direction = 'Long' if raw_dir in long_vals else 'Short'
+
+                    # Get entry/exit info
+                    # Option A: entry=price, exit from net_pl
+                    net_pl_col = mapping.get('net_pl_col', '')
+                    entry_price = price
+                    if net_pl_col:
+                        try: net_pl = float(row.get(net_pl_col, '0').replace('$', '').replace(',', ''))
+                        except: net_pl = 0.0
+                        if direction == 'Long' and qty > 0:
+                            exit_price = entry_price + (net_pl / qty)
+                        elif qty > 0:
+                            exit_price = entry_price - (net_pl / qty)
+                        else:
+                            exit_price = entry_price
+                    else:
+                        # Option B: explicit exit_price column
+                        exit_col = mapping.get('exit_price_col', '')
+                        try: exit_price = float(row.get(exit_col, '0').replace('$', '').replace(',', ''))
+                        except: exit_price = entry_price
+
+                    tag = row.get(mapping.get('tag_col', ''), '').strip()
+                    ct = ClosedTrade(symbol, date, date, qty, entry_price, exit_price,
+                                    fees, 0.0, direction, tag=tag)
+                    items.append(ct)
+    except Exception as e:
+        print(f"Error reading Generic CSV {filepath}: {e}")
+        return []
+    return items
+
 
 def match_trades(trades):
     trades = sorted(trades, key=lambda t: (t.date, t.symbol))
@@ -2775,8 +3106,38 @@ def main():
     all_alaric_trades = merge_item_counts(ALARIC_DIR, process_alaric_trades)
     print(f"Total deduplicated Alaric trades: {len(all_alaric_trades)}")
 
+    # 3. Process MetaTrader trades (pre-matched)
+    print("Processing MetaTrader trades...")
+    all_mt_trades = merge_item_counts(METATRADER_DIR, process_metatrader_trades)
+    print(f"Total deduplicated MetaTrader trades: {len(all_mt_trades)}")
+
+    # 4. Process DAS Trader executions
+    print("Processing DAS executions...")
+    all_das_executions = merge_item_counts(DAS_DIR, process_das_trades)
+    print(f"Total deduplicated DAS executions: {len(all_das_executions)}")
+    closed_das_trades = match_trades(all_das_executions)
+    print(f"Generated {len(closed_das_trades)} closed trades from DAS.")
+
+    # 5. Process ThinkOrSwim executions
+    print("Processing ThinkOrSwim executions...")
+    all_tos_executions = merge_item_counts(TOS_DIR, process_tos_trades)
+    print(f"Total deduplicated TOS executions: {len(all_tos_executions)}")
+    closed_tos_trades = match_trades(all_tos_executions)
+    print(f"Generated {len(closed_tos_trades)} closed trades from TOS.")
+
+    # 6. Process Generic CSV imports
+    print("Processing Generic trade imports...")
+    all_generic_items = merge_item_counts(GENERIC_DIR, process_generic_trades)
+    # Generic can return Trade or ClosedTrade — separate them
+    generic_executions = [x for x in all_generic_items if isinstance(x, Trade)]
+    generic_closed = [x for x in all_generic_items if isinstance(x, ClosedTrade)]
+    closed_generic_trades = match_trades(generic_executions) + generic_closed
+    print(f"Total deduplicated Generic items: {len(all_generic_items)} -> "
+          f"{len(closed_generic_trades)} closed trades.")
+
     # Combine all trades
-    all_closed_trades = closed_execution_trades + all_alaric_trades
+    all_closed_trades = (closed_execution_trades + all_alaric_trades + all_mt_trades +
+                         closed_das_trades + closed_tos_trades + closed_generic_trades)
     print(f"Total overall closed trades: {len(all_closed_trades)}")
 
     # Apply saved tags from tags.json

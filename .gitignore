@@ -9,6 +9,10 @@ logo.png
 Reports_PropReports/
 Reports_Gastos/
 Reports_Schwab/
+Reports_MetaTrader/
+Reports_DAS/
+Reports_TOS/
+Reports_Generic/
 
 # Archivos generados
 trading_report.html

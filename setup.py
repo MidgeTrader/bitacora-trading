@@ -45,6 +45,66 @@ def main():
             print(f"  WARNING: '{logo}' no existe. El logo no se mostrara hasta que corrijas la ruta.")
 
     print()
+    print("--- PLATAFORMAS DE TRADING ---")
+    print("Selecciona las plataformas que usas (creara las carpetas para tus CSVs):")
+    print()
+    print("  1. MetaTrader 4/5 (Account History CSV)")
+    print("  2. DAS Trader (Execution log CSV)")
+    print("  3. ThinkOrSwim (Trade confirmation CSV)")
+    print("  4. Schwab (Trade confirmation CSV)")
+    print("  5. Generica (CSV con mapping.json personalizado)")
+    print("  6. PropReports / Alaric (descarga automatica)")
+    print()
+    print("Escribe los numeros separados por comas, ej: 1,3,4")
+
+    sel = input("Plataformas (deja vacio para todas): ").strip()
+    if not sel:
+        selected = ['1', '2', '3', '4', '5', '6']
+    else:
+        selected = [s.strip() for s in sel.split(',')]
+
+    platform_dirs = []
+    if '1' in selected: platform_dirs.append('Reports_MetaTrader')
+    if '2' in selected: platform_dirs.append('Reports_DAS')
+    if '3' in selected: platform_dirs.append('Reports_TOS')
+    if '4' in selected: platform_dirs.append('Reports_Schwab')
+    if '5' in selected: platform_dirs.append('Reports_Generic')
+    if '6' in selected: platform_dirs.append('Reports_PropReports')
+
+    # Always create Gastos folder
+    platform_dirs.append('Reports_Gastos')
+
+    for d in platform_dirs:
+        dir_path = os.path.join(SCRIPT_DIR, d)
+        os.makedirs(dir_path, exist_ok=True)
+        # Create example CSV in Generic folder
+        if d == 'Reports_Generic':
+            example_csv = os.path.join(dir_path, 'example_trades.csv')
+            if not os.path.exists(example_csv):
+                with open(example_csv, 'w') as f:
+                    f.write("Date,Symbol,Side,Qty,Price,Commission,Direction\n")
+                    f.write("01/15/2026,AAPL,BUY,100,150.00,1.50,Long\n")
+                    f.write("01/20/2026,AAPL,SELL,100,155.00,1.50,Long\n")
+            mapping = os.path.join(dir_path, 'mapping.json')
+            if not os.path.exists(mapping):
+                import json
+                with open(mapping, 'w') as f:
+                    json.dump({
+                        "type": "executions",
+                        "date_col": "Date",
+                        "date_format": "%m/%d/%Y",
+                        "symbol_col": "Symbol",
+                        "action_col": "Side",
+                        "quantity_col": "Qty",
+                        "price_col": "Price",
+                        "fees_col": "Commission",
+                        "buy_values": ["BUY"],
+                        "sell_values": ["SELL"]
+                    }, f, indent=2)
+
+    print(f"  Carpetas creadas: {', '.join(platform_dirs)}")
+
+    print()
     print("--- PROPREPORTS (Broker) ---")
     print("(Deja en blanco si no usas PropReports)")
 
