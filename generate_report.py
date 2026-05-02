@@ -1709,13 +1709,21 @@ def generate_html_report(closed_trades, expenses_by_day):
                 </div>
             </div>
 
+            <div style="margin-bottom: 2rem;">
+                <div class="card-title" style="margin-bottom: 1rem;">Language</div>
+                <div style="display: flex; gap: 0.5rem;">
+                    <button class="nav-btn" id="btnLangES" style="flex: 1; font-size: 0.7rem;" onclick="setLang('es')">ES</button>
+                    <button class="nav-btn" id="btnLangEN" style="flex: 1; font-size: 0.7rem;" onclick="setLang('en')">EN</button>
+                </div>
+            </div>
+
             <button class="nav-btn" style="width: 100%; margin-top: 1rem; border-color: var(--accent-red); color: var(--accent-red);" onclick="resetTheme()">RESET TO DEFAULT</button>
         </div>
         <!-- ANNUAL VIEW -->
         <section id="annualView" class="view-section active">
              <div class="calendar-header">
                 <div style="display: flex; align-items: center; gap: 1rem;">
-                    <h1>Annual Performance</h1>
+                    <h1 id="annualTitle">Annual Performance</h1>
                     <select id="yearSelector" onchange="updateAnnualView()" style="background: var(--card-bg); color: var(--text-primary); border: 1px solid var(--border-color); padding: 0.5rem; border-radius: 0.5rem; font-family: inherit; font-size: 1rem; cursor: pointer;"></select>
                 </div>
             </div>
@@ -1931,6 +1939,451 @@ def generate_html_report(closed_trades, expenses_by_day):
             const dailyEquityData = {daily_equity_json};
             const dailyTags = {daily_tags_json};
 
+            // --- i18n ---
+            const savedLang = localStorage.getItem('lang');
+            let LANG = savedLang || (navigator.language.startsWith('es') ? 'es' : 'en');
+
+            const TK = {{
+                en: {{
+                    performance: "Performance",
+                    annualBoard: "Annual Board",
+                    calendar: "Calendar",
+                    dailyDetails: "Daily Details",
+                    ratios: "Ratios",
+                    customize: "CUSTOMIZE",
+                    themeConfig: "THEME CONFIG",
+                    quickPresets: "Quick Presets",
+                    tronCyan: "Tron Cyan",
+                    matrix: "Matrix",
+                    redAlert: "Red Alert",
+                    purpleRain: "Purple Rain",
+                    goldEmber: "Gold Ember",
+                    monoSteel: "Mono Steel",
+                    primaryAccent: "Primary Accent",
+                    circuitGridIntensity: "Circuit Grid Intensity",
+                    interfaceMode: "Interface Mode",
+                    dark: "Dark",
+                    light: "Light",
+                    resetToDefault: "RESET TO DEFAULT",
+                    language: "Language",
+                    annualPerformance: "Annual Performance",
+                    grossPL: "Gross P&L",
+                    fees: "Fees",
+                    netPL: "Net P&L",
+                    expenses: "Expenses",
+                    profitFactor: "Profit Factor",
+                    winRate: "Win Rate",
+                    totalTrades: "Total Trades",
+                    performanceAnalysis: "Performance Analysis (YTD)",
+                    cumulativeEquity: "Cumulative Equity",
+                    drawdown: "Drawdown",
+                    monthlyNetPL: "Monthly Net P&L",
+                    selectMonth: "Select a Month",
+                    monthlyAnalysis: "Monthly Analysis",
+                    prev: "Prev",
+                    next: "Next",
+                    gainLossStats: "Gain / Loss Stats",
+                    metric: "Metric",
+                    won: "Won",
+                    lost: "Lost",
+                    totalPL: "Total P&L",
+                    avgPL: "Avg P&L ($)",
+                    avgPLPct: "Avg P&L (%)",
+                    trades: "Trades",
+                    streak: "Streak",
+                    maxStreak: "Max Streak",
+                    maxDrawdown: "Max Drawdown",
+                    avgWinLoss: "Avg Win / Loss",
+                    ratiosRow: "Ratios",
+                    expensesRow: "Expenses",
+                    tradeNotes: "Trade Notes",
+                    fixedExpenses: "Fixed Expenses",
+                    monthlyPerformanceCharts: "Monthly Performance Charts",
+                    dailyNetPL: "Daily Net P&L",
+                    monthlyTickerPerformance: "Monthly Ticker Performance",
+                    symbol: "Symbol",
+                    netPLCol: "Net P&L",
+                    tradesCol: "Trades",
+                    saveTags: "Save Tags",
+                    dailyPL: "Daily P&L",
+                    commissions: "Commissions",
+                    dayEquityExecution: "Day Equity & Execution",
+                    dir: "Dir",
+                    qty: "Qty",
+                    entry: "Entry",
+                    exit: "Exit",
+                    pl: "P&L",
+                    entryTag: "Entry Tag",
+                    exitTag: "Exit Tag",
+                    detailedRatios: "Detailed Ratios",
+                    netProfit: "Net Profit",
+                    winRateW1: "Win Rate (W:1)",
+                    winningTrades: "Winning Trades",
+                    losingTrades: "Losing Trades",
+                    longVsShort: "Long vs Short",
+                    gainPainRatio: "Gain / Pain Ratio",
+                    expectancy: "Expectancy",
+                    maxConsecWins: "Max Consec Wins",
+                    maxConsecLosses: "Max Consec Losses",
+                    advancedPerformanceRatios: "Advanced Performance Ratios",
+                    edgeScore: "Edge Score",
+                    recoveryFactor: "Recovery Factor",
+                    payoffRatio: "Payoff Ratio",
+                    calmarRatio: "Calmar Ratio",
+                    sharpeRatio: "Sharpe Ratio",
+                    sortinoRatio: "Sortino Ratio",
+                    sqn: "SQN",
+                    consistencyRatio: "Consistency Ratio",
+                    zScore: "Z-Score",
+                    profitFactorL: "Profit Factor (L)",
+                    profitFactorS: "Profit Factor (S)",
+                    winRateL: "Win Rate (L)",
+                    winRateS: "Win Rate (S)",
+                    tradesPerDay: "Trades per Day",
+                    maxDDDuration: "Max DD Duration",
+                    equityPeak: "Equity Peak",
+                    stdDevPL: "Std Dev P&L",
+                    standardError: "Standard Error",
+                    tScore: "T-Score",
+                    avgTimeWin: "Avg Time Win",
+                    kellyCriterion: "Kelly Criterion",
+                    tradedDays: "Traded Days",
+                    tradingCommissions: "Trading Commissions",
+                    avgDailyPL: "Avg Daily P&L",
+                    tagPerformance: "Tag Performance",
+                    tag: "Tag",
+                    count: "Count",
+                    weekdayPerformance: "Weekday Performance",
+                    day: "Day",
+                    totalPLDay: "Total P&L",
+                    noData: "No Data",
+                    noDataDash: "No data",
+                    selectDayCalendar: "Select a day from the calendar",
+                    tradeDetails: "Trade Details",
+                    entryTagLabel: "Entry Tag",
+                    exitTagLabel: "Exit Tag",
+                    orTypeCustom: "Or type custom...",
+                    note: "Note",
+                    optionalNote: "Optional note...",
+                    saveClose: "Save & Close",
+                    cancel: "Cancel",
+                    tagsSaved: "Tags saved!",
+                    tagsDownloaded: "tags.json downloaded -- place it in Reportes_Brokers/",
+                    untagged: "Untagged",
+                    week: "Week",
+                    trds: "trds",
+                    wlRatio: "W/L",
+                    gpRatio: "G/P",
+                    symbolLabel: "Symbol:",
+                    dirLabel: "Dir:",
+                    qtyLabel: "Qty:",
+                    entryLabel: "Entry:",
+                    exitLabel: "Exit:",
+                    plLabel: "P&L:",
+                    errorLoadingDashboard: "Error loading dashboard:",
+                    dailyPLChart: "Daily P&L",
+                    monthEquity: "Month Equity",
+                    monthEquityChart: "Month Equity",
+                    longPct: "Long (...%)",
+                    shortPct: "Short (...%)",
+                }},
+                es: {{
+                    performance: "Rendimiento",
+                    annualBoard: "Tablero Anual",
+                    calendar: "Calendario",
+                    dailyDetails: "Detalle Diario",
+                    ratios: "Metricas",
+                    customize: "PERSONALIZAR",
+                    themeConfig: "CONFIG TEMA",
+                    quickPresets: "Presets Rapidos",
+                    tronCyan: "Tron Cyan",
+                    matrix: "Matrix",
+                    redAlert: "Alerta Roja",
+                    purpleRain: "Lluvia Purpura",
+                    goldEmber: "Ambar Dorado",
+                    monoSteel: "Acero Mono",
+                    primaryAccent: "Color Principal",
+                    circuitGridIntensity: "Intensidad de la Cuadricula",
+                    interfaceMode: "Modo de Interfaz",
+                    dark: "Oscuro",
+                    light: "Claro",
+                    resetToDefault: "RESTAURAR VALORES",
+                    language: "Idioma",
+                    annualPerformance: "Rendimiento Anual",
+                    grossPL: "Ganancia Bruta",
+                    fees: "Comisiones",
+                    netPL: "Ganancia Neta",
+                    expenses: "Gastos",
+                    profitFactor: "Factor de Ganancia",
+                    winRate: "Tasa de Acierto",
+                    totalTrades: "Total Trades",
+                    performanceAnalysis: "Analisis de Rendimiento (YTD)",
+                    cumulativeEquity: "Equidad Acumulada",
+                    drawdown: "Drawdown",
+                    monthlyNetPL: "P&L Neto Mensual",
+                    selectMonth: "Selecciona un Mes",
+                    monthlyAnalysis: "Analisis Mensual",
+                    prev: "Anterior",
+                    next: "Siguiente",
+                    gainLossStats: "Estadisticas G/P",
+                    metric: "Metrica",
+                    won: "Ganados",
+                    lost: "Perdidos",
+                    totalPL: "P&L Total",
+                    avgPL: "Prom P&L ($)",
+                    avgPLPct: "Prom P&L (%)",
+                    trades: "Trades",
+                    streak: "Racha",
+                    maxStreak: "Racha Max",
+                    maxDrawdown: "Drawdown Max",
+                    avgWinLoss: "Prom Gan/Perd",
+                    ratiosRow: "Ratios",
+                    expensesRow: "Gastos",
+                    tradeNotes: "Notas de Trades",
+                    fixedExpenses: "Gastos Fijos",
+                    monthlyPerformanceCharts: "Graficas de Rendimiento Mensual",
+                    dailyNetPL: "P&L Neto Diario",
+                    monthlyTickerPerformance: "Rendimiento Mensual por Ticker",
+                    symbol: "Simbolo",
+                    netPLCol: "P&L Neto",
+                    tradesCol: "Trades",
+                    saveTags: "Guardar Tags",
+                    dailyPL: "P&L Diario",
+                    commissions: "Comisiones",
+                    dayEquityExecution: "Equidad y Ejecucion del Dia",
+                    dir: "Dir",
+                    qty: "Cant",
+                    entry: "Entrada",
+                    exit: "Salida",
+                    pl: "P&L",
+                    entryTag: "Tag Entrada",
+                    exitTag: "Tag Salida",
+                    detailedRatios: "Ratios Detallados",
+                    netProfit: "Ganancia Neta",
+                    winRateW1: "Tasa Acierto (W:1)",
+                    winningTrades: "Trades Ganadores",
+                    losingTrades: "Trades Perdedores",
+                    longVsShort: "Long vs Short",
+                    gainPainRatio: "Ratio G/P",
+                    expectancy: "Expectativa",
+                    maxConsecWins: "Max Ganados Consec",
+                    maxConsecLosses: "Max Perdidos Consec",
+                    advancedPerformanceRatios: "Ratios de Rendimiento Avanzados",
+                    edgeScore: "Edge Score",
+                    recoveryFactor: "Factor de Recuperacion",
+                    payoffRatio: "Payoff Ratio",
+                    calmarRatio: "Calmar Ratio",
+                    sharpeRatio: "Sharpe Ratio",
+                    sortinoRatio: "Sortino Ratio",
+                    sqn: "SQN",
+                    consistencyRatio: "Ratio de Consistencia",
+                    zScore: "Z-Score",
+                    profitFactorL: "Factor Ganancia (L)",
+                    profitFactorS: "Factor Ganancia (S)",
+                    winRateL: "Tasa Acierto (L)",
+                    winRateS: "Tasa Acierto (S)",
+                    tradesPerDay: "Trades por Dia",
+                    maxDDDuration: "Duracion Max DD",
+                    equityPeak: "Pico de Equidad",
+                    stdDevPL: "Desviacion Estandar P&L",
+                    standardError: "Error Estandar",
+                    tScore: "T-Score",
+                    avgTimeWin: "Tiempo Prom Ganador",
+                    kellyCriterion: "Criterio de Kelly",
+                    tradedDays: "Dias Tradeados",
+                    tradingCommissions: "Comisiones de Trading",
+                    avgDailyPL: "Prom P&L Diario",
+                    tagPerformance: "Rendimiento por Tag",
+                    tag: "Tag",
+                    count: "Cuenta",
+                    weekdayPerformance: "Rendimiento por Dia",
+                    day: "Dia",
+                    totalPLDay: "P&L Total",
+                    noData: "Sin Datos",
+                    noDataDash: "Sin datos",
+                    selectDayCalendar: "Selecciona un dia del calendario",
+                    tradeDetails: "Detalles del Trade",
+                    entryTagLabel: "Tag de Entrada",
+                    exitTagLabel: "Tag de Salida",
+                    orTypeCustom: "O escribe uno...",
+                    note: "Nota",
+                    optionalNote: "Nota opcional...",
+                    saveClose: "Guardar y Cerrar",
+                    cancel: "Cancelar",
+                    tagsSaved: "Tags guardados!",
+                    tagsDownloaded: "tags.json descargado -- colocalo en Reportes_Brokers/",
+                    untagged: "Sin Tag",
+                    week: "Sem",
+                    trds: "trades",
+                    wlRatio: "W/L",
+                    gpRatio: "G/P",
+                    symbolLabel: "Simbolo:",
+                    dirLabel: "Dir:",
+                    qtyLabel: "Cant:",
+                    entryLabel: "Entrada:",
+                    exitLabel: "Salida:",
+                    plLabel: "P&L:",
+                    errorLoadingDashboard: "Error cargando dashboard:",
+                    dailyPLChart: "P&L Diario",
+                    monthEquity: "Equidad del Mes",
+                    monthEquityChart: "Equidad del Mes",
+                    longPct: "Long (...%)",
+                    shortPct: "Short (...%)",
+                }}
+            }};
+
+            function t(key) {{
+                return (TK[LANG] && TK[LANG][key]) || (TK['en'] && TK['en'][key]) || key;
+            }}
+
+            function refreshStaticText() {{
+                // Walk all elements with data-i18n attribute
+                document.querySelectorAll('[data-i18n]').forEach(el => {{
+                    const key = el.getAttribute('data-i18n');
+                    if (el.tagName === 'INPUT' && (el.type === 'text' || el.tagName === 'TEXTAREA')) {{
+                        el.placeholder = t(key);
+                    }} else if (el.tagName === 'INPUT') {{
+                        // skip
+                    }} else {{
+                        el.innerText = t(key);
+                    }}
+                }});
+                // Update all card-title elements by matching known English/Spanish text
+                const i18nMap = {{
+                    'Gross P&L': 'grossPL', 'Ganancia Bruta': 'grossPL',
+                    'Fees': 'fees', 'Comisiones': 'fees',
+                    'Net P&L': 'netPL', 'Ganancia Neta': 'netPL',
+                    'Expenses': 'expenses', 'Gastos': 'expenses',
+                    'Profit Factor': 'profitFactor', 'Factor de Ganancia': 'profitFactor',
+                    'Win Rate': 'winRate', 'Tasa de Acierto': 'winRate',
+                    'Total Trades': 'totalTrades',
+                    'Performance Analysis (YTD)': 'performanceAnalysis', 'Analisis de Rendimiento (YTD)': 'performanceAnalysis',
+                    'Cumulative Equity': 'cumulativeEquity', 'Equidad Acumulada': 'cumulativeEquity',
+                    'Drawdown': 'drawdown',
+                    'Monthly Net P&L': 'monthlyNetPL', 'P&L Neto Mensual': 'monthlyNetPL',
+                    'Select a Month': 'selectMonth', 'Selecciona un Mes': 'selectMonth',
+                    'Monthly Analysis': 'monthlyAnalysis', 'Analisis Mensual': 'monthlyAnalysis',
+                    'Calendar': 'calendar', 'Calendario': 'calendar',
+                    'Prev': 'prev', 'Anterior': 'prev',
+                    'Next': 'next', 'Siguiente': 'next',
+                    'Gain / Loss Stats': 'gainLossStats', 'Estadisticas G/P': 'gainLossStats',
+                    'Metric': 'metric', 'Metrica': 'metric',
+                    'Won': 'won', 'Ganados': 'won',
+                    'Lost': 'lost', 'Perdidos': 'lost',
+                    'Streak': 'streak', 'Racha': 'streak',
+                    'Max Streak': 'maxStreak', 'Racha Max': 'maxStreak',
+                    'Max Drawdown': 'maxDrawdown', 'Drawdown Max': 'maxDrawdown',
+                    'Fixed Expenses': 'fixedExpenses', 'Gastos Fijos': 'fixedExpenses',
+                    'Monthly Performance Charts': 'monthlyPerformanceCharts', 'Graficas de Rendimiento Mensual': 'monthlyPerformanceCharts',
+                    'Daily Net P&L': 'dailyNetPL', 'P&L Neto Diario': 'dailyNetPL',
+                    'Monthly Ticker Performance': 'monthlyTickerPerformance', 'Rendimiento Mensual por Ticker': 'monthlyTickerPerformance',
+                    'Daily P&L': 'dailyPL', 'P&L Diario': 'dailyPL',
+                    'Commissions': 'commissions', 'Comisiones': 'commissions',
+                    'Day Equity & Execution': 'dayEquityExecution', 'Equidad y Ejecucion del Dia': 'dayEquityExecution',
+                    'Detailed Ratios': 'detailedRatios', 'Ratios Detallados': 'detailedRatios',
+                    'Trade Details': 'tradeDetails', 'Detalles del Trade': 'tradeDetails',
+                    'Entry Tag': 'entryTag', 'Tag Entrada': 'entryTag',
+                    'Exit Tag': 'exitTag', 'Tag Salida': 'exitTag',
+                    'Note': 'note', 'Nota': 'note',
+                    'Save & Close': 'saveClose', 'Guardar y Cerrar': 'saveClose',
+                    'Cancel': 'cancel', 'Cancelar': 'cancel',
+                    'RESET TO DEFAULT': 'resetToDefault', 'RESTAURAR VALORES': 'resetToDefault',
+                    'THEME CONFIG': 'themeConfig', 'CONFIG TEMA': 'themeConfig',
+                    'Tron Cyan': 'tronCyan',
+                    'Matrix': 'matrix',
+                    'Red Alert': 'redAlert', 'Alerta Roja': 'redAlert',
+                    'Purple Rain': 'purpleRain', 'Lluvia Purpura': 'purpleRain',
+                    'Gold Ember': 'goldEmber', 'Ambar Dorado': 'goldEmber',
+                    'Mono Steel': 'monoSteel', 'Acero Mono': 'monoSteel',
+                    'Dark': 'dark', 'Oscuro': 'dark',
+                    'Light': 'light', 'Claro': 'light',
+                    'Quick Presets': 'quickPresets', 'Presets Rapidos': 'quickPresets',
+                    'Primary Accent': 'primaryAccent', 'Color Principal': 'primaryAccent',
+                    'Circuit Grid Intensity': 'circuitGridIntensity', 'Intensidad de la Cuadricula': 'circuitGridIntensity',
+                    'Interface Mode': 'interfaceMode', 'Modo de Interfaz': 'interfaceMode',
+                    'Language': 'language', 'Idioma': 'language',
+                    'Symbol:': 'symbolLabel', 'Simbolo:': 'symbolLabel',
+                    'Dir:': 'dirLabel',
+                    'Qty:': 'qtyLabel', 'Cant:': 'qtyLabel',
+                    'Entry:': 'entryLabel', 'Entrada:': 'entryLabel',
+                    'Exit:': 'exitLabel', 'Salida:': 'exitLabel',
+                    'P&L:': 'plLabel',
+                    'Ratios': 'ratiosRow',
+                    'Trade Notes': 'tradeNotes', 'Notas de Trades': 'tradeNotes',
+                    'Total P&L': 'totalPL', 'P&L Total': 'totalPL',
+                    'Avg P&L ($)': 'avgPL', 'Prom P&L ($)': 'avgPL',
+                    'Avg P&L (%)': 'avgPLPct', 'Prom P&L (%)': 'avgPLPct',
+                    'Trades': 'trades',
+                    'Symbol': 'symbol', 'Simbolo': 'symbol',
+                    'Net P&L': 'netPLCol', 'P&L Neto': 'netPLCol',
+                    'Dir': 'dir',
+                    'Qty': 'qty', 'Cant': 'qty',
+                    'Entry': 'entry', 'Entrada': 'entry',
+                    'Exit': 'exit', 'Salida': 'exit',
+                    'P&L': 'pl',
+                    'Annual Performance': 'annualPerformance', 'Rendimiento Anual': 'annualPerformance',
+                    'Daily Details': 'dailyDetails', 'Detalle Diario': 'dailyDetails',
+                    'Save Tags': 'saveTags', 'Guardar Tags': 'saveTags',
+                }};
+                document.querySelectorAll('.card-title, th, td, button, label, h1, h2, h3, span, strong').forEach(el => {{
+                    if (el.children.length > 0) return; // skip elements with children
+                    const txt = el.innerText.trim();
+                    if (i18nMap[txt]) {{
+                        el.innerText = t(i18nMap[txt]);
+                    }}
+                }});
+                // Update placeholders
+                const phMap = {{
+                    'Or type custom...': 'orTypeCustom', 'O escribe uno...': 'orTypeCustom',
+                    'Optional note...': 'optionalNote', 'Nota opcional...': 'optionalNote',
+                }};
+                document.querySelectorAll('input[placeholder], textarea[placeholder]').forEach(el => {{
+                    if (phMap[el.placeholder]) el.placeholder = t(phMap[el.placeholder]);
+                }});
+                // Update customization trigger
+                document.getElementById('customizationTrigger').innerHTML = '<span style="font-size: 1rem;">🎨</span> ' + t('customize');
+                // Update save tags button
+                const saveBtn = document.querySelector('#dailyView button[onclick="saveTagsToFile()"]');
+                if (saveBtn) saveBtn.innerHTML = '&#128190; ' + t('saveTags');
+                // Update Performance subtitle
+                const perfEl = document.querySelector('.sidebar p');
+                if (perfEl) perfEl.innerText = t('performance');
+            }}
+
+            function setLang(lang) {{
+                LANG = lang;
+                localStorage.setItem('lang', lang);
+                document.getElementById('btnLangES').classList.toggle('active', lang === 'es');
+                document.getElementById('btnLangEN').classList.toggle('active', lang === 'en');
+                document.documentElement.lang = lang;
+                document.getElementById('btn-annual').innerText = t('annualBoard');
+                document.getElementById('btn-monthly').innerText = t('calendar');
+                document.getElementById('btn-daily').innerText = t('dailyDetails');
+                document.getElementById('btn-ratios').innerText = t('ratios');
+                refreshStaticText();
+                // Re-render current view
+                if (currentView === 'annual') renderAnnual();
+                if (currentView === 'monthly') {{ renderCalendar(); }}
+                if (currentView === 'daily') renderDaily();
+                if (currentView === 'ratios') renderRatios();
+            }}
+
+            // Apply saved lang on load
+            (function() {{
+                if (savedLang) {{
+                    document.documentElement.lang = savedLang;
+                    document.getElementById('btnLangES').classList.toggle('active', savedLang === 'es');
+                    document.getElementById('btnLangEN').classList.toggle('active', savedLang === 'en');
+                }} else {{
+                    document.getElementById('btnLang' + (LANG === 'es' ? 'ES' : 'EN')).classList.add('active');
+                }}
+                document.getElementById('btn-annual').innerText = t('annualBoard');
+                document.getElementById('btn-monthly').innerText = t('calendar');
+                document.getElementById('btn-daily').innerText = t('dailyDetails');
+                document.getElementById('btn-ratios').innerText = t('ratios');
+                document.getElementById('customizationTrigger').innerHTML = '<span style="font-size: 1rem;">🎨</span> ' + t('customize');
+            }})();
+
             let currentView = 'annual';
             let currentDate = new Date(); 
             let currentYearView = 'All';
@@ -2002,7 +2455,7 @@ def generate_html_report(closed_trades, expenses_by_day):
                     const card = document.createElement('div');
                     card.className = 'month-card';
                     card.onclick = () => {{ currentDate = new Date(mKey + '-02'); switchView('monthly'); }};
-                    card.innerHTML = `<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1rem; position:relative; z-index:10;"><span style="font-weight:600; font-size:1.1rem;">${{mKey}}</span><span class="${{pl >= 0 ? 'positive' : 'negative'}}" style="font-weight:700;">${{pl >= 0 ? '+' : '-'}}$${{Math.abs(pl).toLocaleString(undefined, {{minimumFractionDigits: 2, maximumFractionDigits: 2}})}}</span></div><div style="font-size:0.85rem; color:var(--text-secondary); position:relative; z-index:10;"><div>Win Rate: ${{stats.win_rate.toFixed(2)}}%</div><div>Trades: ${{stats.total_trades}}</div></div>`;
+                    card.innerHTML = `<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1rem; position:relative; z-index:10;"><span style="font-weight:600; font-size:1.1rem;">${{mKey}}</span><span class="${{pl >= 0 ? 'positive' : 'negative'}}" style="font-weight:700;">${{pl >= 0 ? '+' : '-'}}$${{Math.abs(pl).toLocaleString(undefined, {{minimumFractionDigits: 2, maximumFractionDigits: 2}})}}</span></div><div style="font-size:0.85rem; color:var(--text-secondary); position:relative; z-index:10;"><div>${{t('winRate')}}: ${{stats.win_rate.toFixed(2)}}%</div><div>${{t('trades')}}: ${{stats.total_trades}}</div></div>`;
                     container.appendChild(card);
                 }});
             }}
@@ -2078,16 +2531,21 @@ def generate_html_report(closed_trades, expenses_by_day):
                 }});
             }}
 
-            const monthNames = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+            const monthsEN = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+            const monthsES = ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"];
+            function getMonthName(idx) {{ return LANG === 'es' ? monthsES[idx] : monthsEN[idx]; }}
+            const daysEN = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Week'];
+            const daysES = ['Lun', 'Mar', 'Mie', 'Jue', 'Vie', 'Sem'];
+            function getDayHeaders() {{ return LANG === 'es' ? daysES : daysEN; }}
             function renderCalendar() {{
                 const year = currentDate.getFullYear();
                 const month = currentDate.getMonth();
                 const monthKey = `${{year}}-${{String(month + 1).padStart(2, '0')}}`;
                 const monthPnl = monthlyData[monthKey] || 0;
-                document.getElementById('currentMonthDisplay').innerHTML = `${{monthNames[month]}} ${{year}} ${{monthPnl > 0 ? `<span class="positive">(+$${{monthPnl.toLocaleString(undefined, {{minimumFractionDigits: 2, maximumFractionDigits: 2}})}})</span>` : (monthPnl < 0 ? `<span class="negative">(-$${{Math.abs(monthPnl).toLocaleString(undefined, {{minimumFractionDigits: 2, maximumFractionDigits: 2}})}})</span>` : `<span>($0.00)</span>`)}}`;
-                
+                document.getElementById('currentMonthDisplay').innerHTML = `${{getMonthName(month)}} ${{year}} ${{monthPnl > 0 ? `<span class="positive">(+$${{monthPnl.toLocaleString(undefined, {{minimumFractionDigits: 2, maximumFractionDigits: 2}})}})</span>` : (monthPnl < 0 ? `<span class="negative">(-$${{Math.abs(monthPnl).toLocaleString(undefined, {{minimumFractionDigits: 2, maximumFractionDigits: 2}})}})</span>` : `<span>($0.00)</span>`)}}`;
+
                 const grid = document.getElementById('calendarGrid'); grid.innerHTML = '';
-                ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Week'].forEach(d => {{ const el = document.createElement('div'); el.className = 'day-name'; el.innerText = d; grid.appendChild(el); }});
+                getDayHeaders().forEach(d => {{ const el = document.createElement('div'); el.className = 'day-name'; el.innerText = d; grid.appendChild(el); }});
                 
                 const firstDay = new Date(year, month, 1).getDay();
                 const daysInMonth = new Date(year, month + 1, 0).getDate();
@@ -2111,7 +2569,7 @@ def generate_html_report(closed_trades, expenses_by_day):
                         const cell = document.createElement('div'); cell.className = 'day-cell';
                         if(dData) {{
                             if(dData.pnl > 0) cell.classList.add('bg-green'); else if(dData.pnl < 0) cell.classList.add('bg-red');
-                            cell.innerHTML = `<div class="day-number">${{i}}</div><div><div class="day-pnl ${{(dData.pnl>=0?'positive':'negative')}}">${{dData.pnl < 0 ? '-' : ''}}$${{Math.abs(dData.pnl).toLocaleString(undefined, {{minimumFractionDigits: 2, maximumFractionDigits: 2}})}}</div><div class="day-trades">${{dData.count}} trds</div></div>`;
+                            cell.innerHTML = `<div class="day-number">${{i}}</div><div><div class="day-pnl ${{(dData.pnl>=0?'positive':'negative')}}">${{dData.pnl < 0 ? '-' : ''}}$${{Math.abs(dData.pnl).toLocaleString(undefined, {{minimumFractionDigits: 2, maximumFractionDigits: 2}})}}</div><div class="day-trades">${{dData.count}} ${{t('trds')}}</div></div>`;
                             cell.onclick = () => {{ selectedDayKey = dDateStr; switchView('daily'); }};
                         }} else {{ cell.style.opacity = '0.5'; cell.innerHTML = `<div class="day-number">${{i}}</div>`; }}
                         grid.appendChild(cell);
@@ -2209,18 +2667,18 @@ def generate_html_report(closed_trades, expenses_by_day):
                 const container = document.getElementById('monthlyStatsDashboard');
                 const stats = monthlyStats[monthKey];
                 const allStats = monthlyGainLoss[monthKey] ? monthlyGainLoss[monthKey].all : null;
-                if(!stats || !allStats) {{ container.innerHTML = 'No data'; return; }}
+                if(!stats || !allStats) {{ container.innerHTML = t('noDataDash'); return; }}
                 const mkCard = (title, val, cls='') => `<div><div class="card-title">${{title}}</div><div class="card-value ${{cls}}">${{val}}</div></div>`;
                 const netPlClass = allStats.total_pl >= 0 ? 'positive' : 'negative';
                 const avgPlClass = allStats.avg_pl >= 0 ? 'positive' : 'negative';
                 const avgPctClass = allStats.avg_pct >= 0 ? 'positive' : 'negative';
                 container.innerHTML = `
-                    ${{mkCard('Net Profit', '$'+allStats.total_pl.toLocaleString(undefined, {{minimumFractionDigits: 2, maximumFractionDigits: 2}}), netPlClass)}}
-                    ${{mkCard('Win Rate', stats.win_rate.toFixed(2)+'%')}}
-                    ${{mkCard('Profit Factor', stats.profit_factor === Infinity ? 'Inf' : stats.profit_factor.toFixed(2))}}
-                    ${{mkCard('Total Trades', stats.total_trades)}}
-                    ${{mkCard('Avg Trade ($)', '$'+allStats.avg_pl.toFixed(2), avgPlClass)}}
-                    ${{mkCard('Avg Trade (%)', allStats.avg_pct.toFixed(2)+'%', avgPctClass)}}
+                    ${{mkCard(t('netProfit'), '$'+allStats.total_pl.toLocaleString(undefined, {{minimumFractionDigits: 2, maximumFractionDigits: 2}}), netPlClass)}}
+                    ${{mkCard(t('winRate'), stats.win_rate.toFixed(2)+'%')}}
+                    ${{mkCard(t('profitFactor'), stats.profit_factor === Infinity ? 'Inf' : stats.profit_factor.toFixed(2))}}
+                    ${{mkCard(t('totalTrades'), stats.total_trades)}}
+                    ${{mkCard(t('avgPL'), '$'+allStats.avg_pl.toFixed(2), avgPlClass)}}
+                    ${{mkCard(t('avgPLPct'), allStats.avg_pct.toFixed(2)+'%', avgPctClass)}}
                 `;
             }}
             
@@ -2232,7 +2690,7 @@ def generate_html_report(closed_trades, expenses_by_day):
                 const tbody = document.querySelector('#dailyTradesTable tbody');
                 ['d_gl_total_won','d_gl_total_lost','d_gl_avg_won','d_gl_avg_lost','d_gl_pct_won','d_gl_pct_lost','d_gl_count_won','d_gl_count_lost','d_gl_ratio_wl','d_gl_ratio_gp','d_gl_fees','d_gl_max_dd','d_gl_streak_win','d_gl_streak_loss'].forEach(id => document.getElementById(id).innerText = '-');
                 tbody.innerHTML = '';
-                if(!selectedDayKey) {{ header.innerText = "Select a day from the calendar"; return; }}
+                if(!selectedDayKey) {{ header.innerText = t('selectDayCalendar'); return; }}
                 const data = dailyData[selectedDayKey];
                 header.innerText = selectedDayKey;
                 if(!data) {{ pnlEl.innerText = '-'; commEl.innerText = '-'; return; }}
@@ -2252,10 +2710,10 @@ def generate_html_report(closed_trades, expenses_by_day):
                     const adv = stats.advanced;
                     if(adv) {{
                         const wlRatio = adv.win_loss_ratio;
-                        document.getElementById('d_gl_ratio_wl').innerText = 'W/L: ' + wlRatio.toFixed(2) + ':1';
+                        document.getElementById('d_gl_ratio_wl').innerText = t('wlRatio') + ': ' + wlRatio.toFixed(2) + ':1';
                         document.getElementById('d_gl_ratio_wl').className = wlRatio >= 1 ? 'positive' : 'negative';
                         const gpVal = adv.gain_to_pain;
-                        document.getElementById('d_gl_ratio_gp').innerText = 'G/P: ' + gpVal.toFixed(2) + ':1';
+                        document.getElementById('d_gl_ratio_gp').innerText = t('gpRatio') + ': ' + gpVal.toFixed(2) + ':1';
                         document.getElementById('d_gl_ratio_gp').className = gpVal >= 1 ? 'positive' : 'negative';
                         document.getElementById('d_gl_fees').innerText = '$'+data.fees.toLocaleString(undefined, {{minimumFractionDigits: 2, maximumFractionDigits: 2}});
                         document.getElementById('d_gl_max_dd').innerText = '$'+adv.max_dd.toLocaleString(undefined, {{minimumFractionDigits: 2, maximumFractionDigits: 2}});
@@ -2566,8 +3024,7 @@ def generate_html_report(closed_trades, expenses_by_day):
                 const year = currentDate.getFullYear();
                 const month = currentDate.getMonth();
                 const monthKey = `${{year}}-${{String(month + 1).padStart(2, '0')}}`;
-                const monthName = monthNames[month];
-                document.getElementById('ratiosTitle').innerText = `${{monthName}} ${{year}}`;
+                document.getElementById('ratiosTitle').innerText = `${{getMonthName(month)}} ${{year}}`;
                 
                 const container = document.getElementById('ratiosGrid');
                 container.innerHTML = '';

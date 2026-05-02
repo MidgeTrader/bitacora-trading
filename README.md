@@ -1,29 +1,108 @@
-# Herramienta de Reportes de Trading (Versión Compartible)
+# Bitacora Trading
 
-Esta carpeta contiene el código necesario para generar un reporte de performance interactivo en HTML a partir de tus archivos de trading (Schwab y Alaric).
+Genera un reporte HTML interactivo de performance a partir de tus archivos CSV de trading. Soporta multiples plataformas y brokers.
 
-## Requisitos
-- **Python 3.x** instalado.
-- Los archivos CSV de tus brokers.
+## Instalacion
 
-## Cómo usar
-1. **Prepara tus archivos CSV**:
-   - Pon tus archivos de Schwab, Alaric y Gastos en esta misma carpeta.
-2. **Configura el script**:
-   - Abre `generate_report.py` con un editor de texto (como Notepad o VS Code).
-   - Busca la sección `CONFIGURACIÓN DE ARCHIVOS` al principio del archivo.
-   - Cambia los nombres de los archivos en las listas `SCHWAB_FILES`, `ALARIC_FILES` y `GASTOS_FILES` para que coincidan exactamente con tus archivos.
-3. **Ejecuta el script**:
-   - Abre una terminal o consola en esta carpeta.
-   - Ejecuta el comando: `python generate_report.py`
-4. **Ver el reporte**:
-   - Se generará un archivo llamado `trading_report_compartible.html`.
-   - Ábrelo con cualquier navegador (Chrome, Edge, etc.) para ver tus estadísticas.
+```bash
+git clone https://github.com/MidgeTrader/bitacora-trading.git
+cd bitacora-trading
+python3 setup.py
+```
 
-## Formatos Esperados
-- **Schwab**: Archivos de ejecuciones con columnas `Date`, `Symbol`, `Quantity`, `Price`, `Action`.
-- **Alaric**: Archivos de trades cerrados con columnas `Opened`, `Closed`, `Symbol`, `Qty`, `Entry`, `Exit`.
-- **Gastos**: Un archivo CSV simple con columnas `Date` (MM/DD/YYYY) y `Debit` (monto del gasto).
+`setup.py` te guia paso a paso: nombre/marca, logo, plataformas que usas y credenciales de broker. Todo se guarda en `.env` (nunca se sube a GitHub).
 
----
-*Desarrollado para Midge_Trader*
+## Uso
+
+```bash
+python3 actualizar_reporte.py
+```
+
+Esto descarga los datos mas recientes y genera `trading_report.html`. Abrelo en tu navegador.
+
+### Opciones
+
+| Comando | Descripcion |
+|---|---|
+| `python3 actualizar_reporte.py` | Descarga mes actual + genera + abre navegador |
+| `python3 actualizar_reporte.py --no-browser` | Sin abrir navegador |
+| `python3 actualizar_reporte.py --all` | Descarga todo el historico |
+| `python3 actualizar_reporte.py 2026-04` | Solo un mes especifico |
+| `python3 actualizar_reporte.py --no-serve` | Abre sin servidor (tags se guardan por descarga) |
+| `python3 generate_report.py` | Solo genera el HTML (sin descargar) |
+
+## Plataformas soportadas
+
+Suelta tus archivos CSV en la carpeta correspondiente:
+
+| Carpeta | Plataforma | Tipo |
+|---|---|---|
+| `Reports_Schwab/` | Charles Schwab | Ejecuciones individuales |
+| `Reports_PropReports/` | PropReports / Alaric | Trades cerrados |
+| `Reports_MetaTrader/` | MetaTrader 4/5 | Account History CSV |
+| `Reports_DAS/` | DAS Trader | Execution log CSV |
+| `Reports_TOS/` | ThinkOrSwim | Trade confirmation CSV |
+| `Reports_Generic/` | Cualquier plataforma | Crea un `mapping.json` y mapea tus columnas |
+| `Reports_Gastos/` | Gastos fijos | CSV con `Date`, `Category`, `Comment`, `Debit` |
+
+### Ejemplo mapping.json para Reports_Generic/
+
+```json
+{
+  "type": "executions",
+  "date_col": "Date",
+  "date_format": "%m/%d/%Y",
+  "symbol_col": "Symbol",
+  "action_col": "Side",
+  "quantity_col": "Qty",
+  "price_col": "Price",
+  "fees_col": "Commission",
+  "buy_values": ["BUY"],
+  "sell_values": ["SELL"]
+}
+```
+
+Para trades pre-emparejados usa `"type": "matched"` y define `direction_col`, `net_pl_col`, etc.
+
+## Editor de TAGs
+
+- Haz clic en cualquier simbolo en **Daily Details** para abrir el modal
+- Asigna tags de entrada, salida y notas
+- Los tags persisten entre regeneraciones del reporte (se guardan en `tags.json`)
+- El boton **Save Tags** guarda tus asignaciones
+
+## Switch EN / ES
+
+El reporte detecta el idioma de tu navegador. Para cambiar:
+
+1. Haz clic en **CUSTOMIZE** (esquina superior derecha)
+2. En la seccion **Language**, elige **ES** o **EN**
+3. Se guarda tu preferencia
+
+## Estructura del proyecto
+
+```
+bitacora-trading/
+├── setup.py                  # Configuracion inicial interactiva
+├── actualizar_reporte.py     # Unifica descarga + generacion + servidor
+├── generate_report.py        # Genera el HTML con todas las metricas
+├── download_alaric.py        # Descarga datos desde PropReports
+├── .env.example              # Plantilla de variables de entorno
+├── .gitignore
+├── Reports_Schwab/           # Tus CSVs de Schwab (gitignored)
+├── Reports_PropReports/      # Tus CSVs de PropReports (gitignored)
+├── Reports_MetaTrader/       # Tus CSVs de MT4/MT5 (gitignored)
+├── Reports_DAS/              # Tus CSVs de DAS (gitignored)
+├── Reports_TOS/              # Tus CSVs de ThinkOrSwim (gitignored)
+├── Reports_Generic/          # Tus CSVs + mapping.json (gitignored)
+├── Reports_Gastos/           # Tus gastos fijos (gitignored)
+├── trading_report.html       # Reporte generado (gitignored)
+└── tags.json                 # Tags guardados (gitignored)
+```
+
+## Seguridad
+
+- `.env` con credenciales nunca se sube a GitHub (.gitignore)
+- Los CSV de trading nunca se suben
+- El logo personal nunca se sube
+- `setup.py` usa `.env.example` como plantilla con placeholders genericos
