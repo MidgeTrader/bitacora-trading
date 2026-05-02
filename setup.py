@@ -6,6 +6,8 @@ Ejecuta una sola vez para crear tu archivo .env con tus datos.
 
 import os
 import sys
+import stat
+from getpass import getpass
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 ENV_PATH = os.path.join(SCRIPT_DIR, ".env")
@@ -109,7 +111,9 @@ def main():
     print("(Deja en blanco si no usas PropReports)")
 
     user = input("Usuario: ").strip()
-    password = input("Password: ").strip()
+    password = ""
+    if user:
+        password = getpass("Password (no se mostrara en pantalla): ").strip()
     group = input("Group ID [-4]: ").strip() or "-4"
     account = input("Account ID: ").strip()
 
@@ -137,6 +141,7 @@ def main():
 
     with open(ENV_PATH, "w") as f:
         f.write("\n".join(lines) + "\n")
+    os.chmod(ENV_PATH, stat.S_IRUSR | stat.S_IWUSR)  # 0600 — solo el propietario lee/escribe
 
     print()
     print("=" * 60)

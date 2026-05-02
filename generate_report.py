@@ -5,12 +5,18 @@ import json
 import calendar
 import os
 import math
+import stat
 import base64
 
 # Cargar .env si existe
 def _load_env():
     env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
     if os.path.exists(env_path):
+        # Ensure restrictive permissions (owner read/write only)
+        try:
+            os.chmod(env_path, stat.S_IRUSR | stat.S_IWUSR)
+        except Exception:
+            pass
         with open(env_path) as f:
             for line in f:
                 line = line.strip()
@@ -216,7 +222,12 @@ def process_execution_trades(filepath):
                 normalized_action = 'Buy'
                 if 'sell' in action: normalized_action = 'Sell'
                 elif 'buy' in action: normalized_action = 'Buy'
-                    
+
+                if not _validate_symbol(symbol) or not _validate_quantity(qty) or not _validate_price(price):
+                    continue
+                if not _validate_date(date):
+                    continue
+
                 trades.append(Trade(date, symbol, qty, price, normalized_action, fees))
                 
     except Exception as e:
@@ -311,18 +322,73 @@ def process_alaric_trades(filepath):
                     fees += abs(get_val(col)) # Fees are often negative in this CSV, we want the magnitude
                 
                 tag = row.get('TAG', '').strip()
-                
+
+                # Validate before creating
+                if not _validate_symbol(symbol):
+                    print(f"  WARNING: Skipping row with invalid symbol '{symbol}' in {os.path.basename(filepath)}")
+                    continue
+                if not _validate_quantity(qty):
+                    print(f"  WARNING: Skipping row with invalid qty '{qty}' in {os.path.basename(filepath)}")
+                    continue
+                if not _validate_price(entry) or not _validate_price(exit_price):
+                    print(f"  WARNING: Skipping row with invalid price in {os.path.basename(filepath)}")
+                    continue
+                if not _validate_date(open_date) or not _validate_date(close_date):
+                    print(f"  WARNING: Skipping row with invalid date in {os.path.basename(filepath)}")
+                    continue
+
                 # ClosedTrade __init__: symbol, open_date, close_date, quantity, entry_price, exit_price, entry_fees, exit_fees, direction, tag
                 # We put all fees in 'entry_fees' for simplicity as we don't have the split
-                
+
                 ct = ClosedTrade(symbol, open_date, close_date, qty, entry, exit_price, fees, 0.0, direction, tag)
                 trades.append(ct)
                 
     except Exception as e:
         print(f"Error reading Alaric CSV: {e}")
         return []
-    
+
     return trades
+
+# --- CSV Validation ---
+
+def _validate_symbol(symbol):
+    """Reject empty, overly long, or suspicious symbols."""
+    if not symbol or not isinstance(symbol, str):
+        return False
+    symbol = symbol.strip()
+    if not symbol or len(symbol) > 20:
+        return False
+    # Must be mostly alphanumeric (allow dots for forex, hyphens for futures)
+    return all(c.isalnum() or c in '.-_' for c in symbol)
+
+
+def _validate_quantity(qty):
+    """Quantity must be positive integer within reasonable range."""
+    try:
+        q = int(float(qty))
+    except (ValueError, TypeError):
+        return False
+    return 1 <= q <= 10_000_000
+
+
+def _validate_price(price):
+    """Price must be non-negative float within reasonable range."""
+    try:
+        p = float(price)
+    except (ValueError, TypeError):
+        return False
+    return 0.0 <= p <= 10_000_000.0
+
+
+def _validate_date(dt):
+    """Date must be a valid datetime between 2000 and 2100."""
+    if dt is None:
+        return False
+    if not isinstance(dt, datetime.datetime):
+        return False
+    return datetime.datetime(2000, 1, 1) <= dt <= datetime.datetime(2100, 1, 1)
+
+# --- End Validation ---
 
 def process_metatrader_trades(filepath):
     """Parse MetaTrader 4/5 Account History CSV into ClosedTrade list."""
@@ -384,6 +450,12 @@ def process_metatrader_trades(filepath):
                 total_fees = abs(commission) + abs(swap) + abs(taxes)
                 # Entry and exit tag from MT Comment (optional)
                 mt_tag = row.get('Comment', '').strip()
+                if not _validate_symbol(symbol) or not _validate_quantity(qty):
+                    continue
+                if not _validate_price(entry) or not _validate_price(exit_price):
+                    continue
+                if not _validate_date(open_date) or not _validate_date(close_date):
+                    continue
                 ct = ClosedTrade(symbol, open_date, close_date, qty, entry, exit_price,
                                 total_fees, 0.0, direction, tag=mt_tag)
                 trades.append(ct)
@@ -446,7 +518,8 @@ def process_das_trades(filepath):
                 else:
                     action = 'Buy' if 'buy' in side.lower() else 'Sell'
 
-                trades.append(Trade(date, symbol, qty, price, action, fees))
+                if _validate_symbol(symbol) and _validate_quantity(qty) and _validate_price(price) and _validate_date(date):
+                    trades.append(Trade(date, symbol, qty, price, action, fees))
     except Exception as e:
         print(f"Error reading DAS CSV {filepath}: {e}")
         return []
@@ -512,7 +585,8 @@ def process_tos_trades(filepath):
                 else:
                     continue  # Skip unrecognized
 
-                trades.append(Trade(date, symbol, qty, price, action, fees))
+                if _validate_symbol(symbol) and _validate_quantity(qty) and _validate_price(price) and _validate_date(date):
+                    trades.append(Trade(date, symbol, qty, price, action, fees))
     except Exception as e:
         print(f"Error reading ThinkOrSwim CSV {filepath}: {e}")
         return []
@@ -613,7 +687,8 @@ def process_generic_trades(filepath):
                         action = 'Sell'
                     else:
                         action = 'Buy'  # default
-                    items.append(Trade(date, symbol, qty, price, action, fees))
+                    if _validate_symbol(symbol) and _validate_quantity(qty) and _validate_price(price) and _validate_date(date):
+                        items.append(Trade(date, symbol, qty, price, action, fees))
 
                 elif trade_type == 'matched':
                     # For pre-matched trades
@@ -642,9 +717,10 @@ def process_generic_trades(filepath):
                         except: exit_price = entry_price
 
                     tag = row.get(mapping.get('tag_col', ''), '').strip()
-                    ct = ClosedTrade(symbol, date, date, qty, entry_price, exit_price,
-                                    fees, 0.0, direction, tag=tag)
-                    items.append(ct)
+                    if _validate_symbol(symbol) and _validate_quantity(qty) and _validate_price(entry_price) and _validate_date(date):
+                        ct = ClosedTrade(symbol, date, date, qty, entry_price, exit_price,
+                                        fees, 0.0, direction, tag=tag)
+                        items.append(ct)
     except Exception as e:
         print(f"Error reading Generic CSV {filepath}: {e}")
         return []

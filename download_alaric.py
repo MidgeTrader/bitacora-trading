@@ -12,6 +12,7 @@ Uso:
 import requests
 import xlrd
 import os
+import stat
 import sys
 from datetime import datetime
 from calendar import monthrange
@@ -22,6 +23,10 @@ BASE_URL = "https://alaric.propreports.com"
 def _load_env():
     env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
     if os.path.exists(env_path):
+        try:
+            os.chmod(env_path, stat.S_IRUSR | stat.S_IWUSR)
+        except Exception:
+            pass
         with open(env_path) as f:
             for line in f:
                 line = line.strip()
