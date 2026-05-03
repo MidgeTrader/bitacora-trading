@@ -1723,6 +1723,52 @@ def generate_html_report(closed_trades, expenses_by_day):
         .bg-green:hover {{ box-shadow: 0 0 15px rgba(57, 255, 20, 0.2); border-color: var(--accent-green); }}
         .bg-red {{ background-color: rgba(255, 0, 60, 0.05); border-color: rgba(255, 0, 60, 0.3); }}
         .bg-red:hover {{ box-shadow: 0 0 15px rgba(255, 0, 60, 0.2); border-color: var(--accent-red); }}
+
+        /* ===== BUILD REPORT TAB ===== */
+        .build-report-layout {{ display: flex; flex-direction: column; gap: 1.5rem; }}
+        .br-filters-container {{ display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; }}
+        .br-panel {{ background: var(--card-bg); border: 1px solid var(--border-color); border-radius: 12px; padding: 1.25rem; box-shadow: var(--border-glow); }}
+        .br-panel-header {{ display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; font-family: 'Orbitron', sans-serif; font-size: 0.85rem; color: var(--accent-primary); text-transform: uppercase; letter-spacing: 0.05em; }}
+        .br-panel-header .count {{ color: var(--accent-green); font-size: 0.9rem; }}
+        .br-panel-label {{ font-size: 0.75rem; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.3rem; font-family: 'Orbitron', sans-serif; }}
+        .br-input, .br-select {{ width: 100%; padding: 0.5rem 0.75rem; background: rgba(0,0,0,0.3); border: 1px solid var(--border-color); border-radius: 6px; color: var(--text-primary); font-family: 'Rajdhani', sans-serif; font-size: 0.9rem; outline: none; transition: border-color 0.2s; }}
+        .br-input:focus, .br-select:focus {{ border-color: var(--accent-primary); box-shadow: 0 0 8px rgba(0,212,255,0.2); }}
+        .br-select option {{ background: #030712; color: var(--text-primary); }}
+        .br-row {{ display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; margin-bottom: 0.75rem; }}
+        .br-actions {{ display: flex; align-items: center; gap: 0.75rem; margin-bottom: 0.5rem; padding-right: 160px; }}
+        .br-actions-center {{ flex: 1; display: flex; justify-content: center; gap: 0.75rem; }}
+        .br-btn {{ padding: 0.6rem 1.5rem; border-radius: 6px; font-family: 'Orbitron', sans-serif; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; cursor: pointer; border: 1px solid var(--border-color); transition: all 0.3s; }}
+        .br-btn-primary {{ background: var(--accent-primary); color: #000; border-color: var(--accent-primary); font-weight: 600; }}
+        .br-btn-primary:hover {{ box-shadow: 0 0 15px rgba(0,212,255,0.4); }}
+        .br-btn-secondary {{ background: transparent; color: var(--text-secondary); border-color: var(--border-color); }}
+        .br-btn-secondary:hover {{ color: var(--accent-primary); border-color: var(--accent-primary); }}
+        .br-section-title {{ font-family: 'Orbitron', sans-serif; font-size: 0.85rem; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.75rem; }}
+        .br-empty {{ text-align: center; padding: 3rem; color: var(--text-secondary); font-size: 1rem; border: 1px dashed var(--border-color); border-radius: 12px; }}
+        .br-table {{ width: 100%; border-collapse: collapse; font-size: 0.85rem; margin-top: 0.5rem; }}
+        .br-table th {{ text-align: left; padding: 0.75rem 1rem; font-family: 'Orbitron', sans-serif; font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-secondary); border-bottom: 1px solid var(--border-color); }}
+        .br-table td {{ padding: 0.65rem 1rem; border-bottom: 1px solid rgba(0,212,255,0.1); }}
+        .br-table tr:last-child td {{ border-bottom: none; }}
+        .br-table .metric-name {{ font-weight: 500; color: var(--text-primary); }}
+        .br-table .value-a, .br-table .value-b {{ color: var(--accent-primary); font-weight: 600; }}
+        .br-badge {{ display: inline-block; padding: 0.15rem 0.5rem; border-radius: 10px; font-size: 0.65rem; font-weight: 600; margin-left: 0.5rem; }}
+        .br-badge-a {{ background: rgba(0,212,255,0.15); color: var(--accent-primary); }}
+        .br-badge-b {{ background: rgba(57,255,20,0.15); color: var(--accent-green); }}
+        .br-tag-select {{ display: flex; flex-wrap: wrap; gap: 0.3rem; background: rgba(0,0,0,0.3); border: 1px solid var(--border-color); border-radius: 6px; padding: 0.4rem; min-height: 38px; cursor: pointer; }}
+        .br-tag-select:hover {{ border-color: var(--accent-primary); }}
+        .br-tag-chip {{ display: inline-flex; align-items: center; gap: 0.25rem; padding: 0.15rem 0.5rem; border-radius: 10px; background: rgba(0,212,255,0.15); color: var(--accent-primary); font-size: 0.75rem; }}
+        .br-tag-chip .remove {{ cursor: pointer; opacity: 0.7; margin-left: 0.15rem; }}
+        .br-tag-chip .remove:hover {{ opacity: 1; }}
+        .br-tag-dropdown {{ position: absolute; top: 100%; left: 0; right: 0; background: rgba(3,7,18,0.98); border: 1px solid var(--border-color); border-radius: 6px; max-height: 180px; overflow-y: auto; z-index: 50; display: none; }}
+        .br-tag-dropdown.show {{ display: block; }}
+        .br-tag-option {{ padding: 0.4rem 0.75rem; cursor: pointer; font-size: 0.85rem; transition: background 0.2s; }}
+        .br-tag-option:hover {{ background: var(--hover-bg); color: var(--accent-primary); }}
+        .br-tag-wrap {{ position: relative; }}
+        .br-no-data {{ text-align: center; padding: 2rem; color: var(--text-secondary); font-style: italic; }}
+        .br-metric-hdr {{ font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-secondary); font-family: 'Orbitron', sans-serif; padding-bottom: 0.25rem; }}
+
+        @media (max-width: 768px) {{
+            .br-filters-container {{ grid-template-columns: 1fr; }}
+        }}
     </style>
 </head>
 <body>
@@ -1737,6 +1783,7 @@ def generate_html_report(closed_trades, expenses_by_day):
         <button class="nav-btn" onclick="switchView('monthly')" id="btn-monthly">Calendar</button>
         <button class="nav-btn" onclick="switchView('daily')" id="btn-daily">Daily details</button>
         <button class="nav-btn" onclick="switchView('ratios')" id="btn-ratios">Metricas</button>
+        <button class="nav-btn" onclick="switchView('buildReport')" id="btn-buildReport">&#x1F4CA; Build Report</button>
     </aside>
 
     <main class="main-content" style="position: relative; z-index: 10;">
@@ -1958,6 +2005,153 @@ def generate_html_report(closed_trades, expenses_by_day):
                 <div><button class="calendar-nav-btn" onclick="changeMonth(-1)">Prev</button><button class="calendar-nav-btn" onclick="changeMonth(1)">Next</button></div>
             </div>
             <div class="grid" id="ratiosGrid" style="grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));"></div>
+        </section>
+
+        <!-- BUILD REPORT VIEW -->
+        <section id="buildReportView" class="view-section">
+            <div class="build-report-layout">
+                <!-- Global Actions -->
+                <div class="br-actions">
+                    <span style="font-family:'Orbitron',sans-serif; font-size:0.8rem; color:var(--text-secondary); text-transform:uppercase; letter-spacing:0.05em; padding-top:0.4rem; white-space:nowrap;">Or build a custom report below</span>
+                    <div class="br-actions-center">
+                        <button class="br-btn br-btn-secondary" onclick="resetBuildReport()">Reset</button>
+                        <button class="br-btn br-btn-primary" onclick="generateBuildReport()">Generate Report</button>
+                    </div>
+                </div>
+
+                <!-- Dual Filter Panels -->
+                <div class="br-filters-container">
+                    <!-- Group A -->
+                    <div class="br-panel">
+                        <div class="br-panel-header">
+                            <span>Group A <span class="br-badge br-badge-a">A</span></span>
+                            <span class="count" id="br-count-a">Trades matches: <strong>0</strong></span>
+                        </div>
+                        <div class="br-row">
+                            <div>
+                                <div class="br-panel-label">Symbol</div>
+                                <input type="text" class="br-input" id="br-symbol-a" placeholder="e.g. AAPL,TSLA" oninput="updateBuildCounts()" />
+                            </div>
+                            <div>
+                                <div class="br-panel-label">Tags</div>
+                                <div class="br-tag-wrap">
+                                    <div class="br-tag-select" id="br-tags-select-a" onclick="toggleTagDropdown('a')">
+                                        <span id="br-tags-placeholder-a" style="color:var(--text-secondary); font-size:0.85rem;">Select tags...</span>
+                                        <span id="br-tags-chips-a"></span>
+                                    </div>
+                                    <div class="br-tag-dropdown" id="br-tags-dropdown-a"></div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="br-row">
+                            <div>
+                                <div class="br-panel-label">Side</div>
+                                <select class="br-select" id="br-side-a" onchange="updateBuildCounts()">
+                                    <option value="all">All</option>
+                                    <option value="Long">Long</option>
+                                    <option value="Short">Short</option>
+                                </select>
+                            </div>
+                            <div>
+                                <div class="br-panel-label">Duration</div>
+                                <select class="br-select" id="br-duration-a" onchange="updateBuildCounts()">
+                                    <option value="all">All</option>
+                                    <option value="day">Day</option>
+                                    <option value="swing">Swing</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="br-row">
+                            <div>
+                                <div class="br-panel-label">Trade P&amp;L</div>
+                                <select class="br-select" id="br-pnl-a" onchange="updateBuildCounts()">
+                                    <option value="all">All</option>
+                                    <option value="winning">Winning</option>
+                                    <option value="losing">Losing</option>
+                                    <option value="breakeven">Break Even</option>
+                                </select>
+                            </div>
+                            <div>
+                                <div class="br-panel-label">Date Range</div>
+                                <div style="display:flex; gap:0.4rem; align-items:center;">
+                                    <input type="date" class="br-input" id="br-datefrom-a" style="flex:1; min-width:0;" onchange="updateBuildCounts()" />
+                                    <span style="color:var(--text-secondary); font-size:0.75rem;">—</span>
+                                    <input type="date" class="br-input" id="br-dateto-a" style="flex:1; min-width:0;" onchange="updateBuildCounts()" />
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Group B -->
+                    <div class="br-panel">
+                        <div class="br-panel-header">
+                            <span>Group B <span class="br-badge br-badge-b">B</span></span>
+                            <span class="count" id="br-count-b">Trades matches: <strong>0</strong></span>
+                        </div>
+                        <div class="br-row">
+                            <div>
+                                <div class="br-panel-label">Symbol</div>
+                                <input type="text" class="br-input" id="br-symbol-b" placeholder="e.g. AAPL,TSLA" oninput="updateBuildCounts()" />
+                            </div>
+                            <div>
+                                <div class="br-panel-label">Tags</div>
+                                <div class="br-tag-wrap">
+                                    <div class="br-tag-select" id="br-tags-select-b" onclick="toggleTagDropdown('b')">
+                                        <span id="br-tags-placeholder-b" style="color:var(--text-secondary); font-size:0.85rem;">Select tags...</span>
+                                        <span id="br-tags-chips-b"></span>
+                                    </div>
+                                    <div class="br-tag-dropdown" id="br-tags-dropdown-b"></div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="br-row">
+                            <div>
+                                <div class="br-panel-label">Side</div>
+                                <select class="br-select" id="br-side-b" onchange="updateBuildCounts()">
+                                    <option value="all">All</option>
+                                    <option value="Long">Long</option>
+                                    <option value="Short">Short</option>
+                                </select>
+                            </div>
+                            <div>
+                                <div class="br-panel-label">Duration</div>
+                                <select class="br-select" id="br-duration-b" onchange="updateBuildCounts()">
+                                    <option value="all">All</option>
+                                    <option value="day">Day</option>
+                                    <option value="swing">Swing</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="br-row">
+                            <div>
+                                <div class="br-panel-label">Trade P&amp;L</div>
+                                <select class="br-select" id="br-pnl-b" onchange="updateBuildCounts()">
+                                    <option value="all">All</option>
+                                    <option value="winning">Winning</option>
+                                    <option value="losing">Losing</option>
+                                    <option value="breakeven">Break Even</option>
+                                </select>
+                            </div>
+                            <div>
+                                <div class="br-panel-label">Date Range</div>
+                                <div style="display:flex; gap:0.4rem; align-items:center;">
+                                    <input type="date" class="br-input" id="br-datefrom-b" style="flex:1; min-width:0;" onchange="updateBuildCounts()" />
+                                    <span style="color:var(--text-secondary); font-size:0.75rem;">—</span>
+                                    <input type="date" class="br-input" id="br-dateto-b" style="flex:1; min-width:0;" onchange="updateBuildCounts()" />
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Results Comparison Table -->
+                <div id="br-results" class="br-panel" style="display:none;">
+                    <div class="br-panel-header">
+                        <span>Comparison Results</span>
+                    </div>
+                    <div id="br-table-container"></div>
+                </div>
+            </div>
         </section>
     </main>
 
@@ -2482,6 +2676,7 @@ def generate_html_report(closed_trades, expenses_by_day):
                 if (viewName === 'monthly') renderCalendar();
                 if (viewName === 'daily') renderDaily();
                 if (viewName === 'ratios') renderRatios();
+                if (viewName === 'buildReport') renderBuildReport();
             }}
             
             function renderAnnual() {{
@@ -3393,10 +3588,250 @@ def generate_html_report(closed_trades, expenses_by_day):
                 if (savedMode) updateMode(savedMode);
             }});
 
-            function changeMonth(delta) {{ 
-                currentDate.setMonth(currentDate.getMonth() + delta); 
+            function changeMonth(delta) {{
+                currentDate.setMonth(currentDate.getMonth() + delta);
                 if(currentView === 'monthly') renderCalendar();
                 if(currentView === 'ratios') renderRatios();
+            }}
+
+            // ===== BUILD REPORT FUNCTIONS =====
+            let buildReportInitialized = false;
+            let _allTradesFlat = null;
+
+            function getAllTrades() {{
+                if (_allTradesFlat) return _allTradesFlat;
+                _allTradesFlat = [];
+                Object.keys(dailyData).forEach(dateKey => {{
+                    const day = dailyData[dateKey];
+                    if (day && day.trades) {{
+                        day.trades.forEach(t => {{
+                            _allTradesFlat.push({{ ...t, _date: dateKey }});
+                        }});
+                    }}
+                }});
+                return _allTradesFlat;
+            }}
+
+            function getUniqueTags() {{
+                const tags = new Set();
+                getAllTrades().forEach(t => {{
+                    (t.tag || '').split(',').map(s => s.trim()).filter(Boolean).forEach(tag => tags.add(tag));
+                    (t.entry_tag || '').split(',').map(s => s.trim()).filter(Boolean).forEach(tag => tags.add(tag));
+                    (t.exit_tag || '').split(',').map(s => s.trim()).filter(Boolean).forEach(tag => tags.add(tag));
+                }});
+                return [...tags].sort();
+            }}
+
+            const brTags = {{ a: [], b: [] }};
+
+            function toggleTagDropdown(group) {{
+                const dd = document.getElementById('br-tags-dropdown-' + group);
+                document.querySelectorAll('.br-tag-dropdown').forEach(el => {{
+                    if (el.id !== dd.id) el.classList.remove('show');
+                }});
+                dd.classList.toggle('show');
+            }}
+
+            function buildTagOptions(group) {{
+                const dd = document.getElementById('br-tags-dropdown-' + group);
+                const allTags = getUniqueTags();
+                if (allTags.length === 0) {{
+                    dd.innerHTML = '<div class="br-tag-option" style="color:var(--text-secondary);">No tags found</div>';
+                    return;
+                }}
+                dd.innerHTML = '';
+                allTags.forEach(tag => {{
+                    const opt = document.createElement('div');
+                    opt.className = 'br-tag-option';
+                    opt.innerHTML = (brTags[group].includes(tag) ? '&#x2713; ' : '') + tag;
+                    opt.onclick = (e) => {{ e.stopPropagation(); toggleTag(group, tag); }};
+                    dd.appendChild(opt);
+                }});
+            }}
+
+            function toggleTag(group, tag) {{
+                const idx = brTags[group].indexOf(tag);
+                if (idx > -1) brTags[group].splice(idx, 1);
+                else brTags[group].push(tag);
+                buildTagOptions(group);
+                renderTagChips(group);
+                updateBuildCounts();
+            }}
+
+            function renderTagChips(group) {{
+                const chips = document.getElementById('br-tags-chips-' + group);
+                const ph = document.getElementById('br-tags-placeholder-' + group);
+                chips.innerHTML = '';
+                const sel = brTags[group];
+                if (sel.length === 0) {{ ph.style.display = 'inline'; return; }}
+                ph.style.display = 'none';
+                sel.forEach(tag => {{
+                    const chip = document.createElement('span');
+                    chip.className = 'br-tag-chip';
+                    chip.innerHTML = tag + ' <span class="remove" onclick="event.stopPropagation(); toggleTag(\'' + group + '\',\'' + tag + '\')">&times;</span>';
+                    chips.appendChild(chip);
+                }});
+            }}
+
+            function getDateInputs(group) {{
+                const fe = document.getElementById('br-datefrom-' + group);
+                const te = document.getElementById('br-dateto-' + group);
+                return {{
+                    start: fe && fe.value ? new Date(fe.value + 'T00:00:00') : null,
+                    end: te && te.value ? new Date(te.value + 'T23:59:59') : null
+                }};
+            }}
+
+            function filterTrades(group) {{
+                const sv = document.getElementById('br-symbol-' + group).value.toUpperCase().trim();
+                const symbols = sv ? sv.split(',').map(s => s.trim()).filter(Boolean) : [];
+                const side = document.getElementById('br-side-' + group).value;
+                const dur = document.getElementById('br-duration-' + group).value;
+                const pf = document.getElementById('br-pnl-' + group).value;
+                const dr = getDateInputs(group);
+                const st = brTags[group];
+                return getAllTrades().filter(t => {{
+                    if (symbols.length && !symbols.includes(t.symbol.toUpperCase())) return false;
+                    if (side !== 'all' && t.type !== side) return false;
+                    if (pf === 'winning' && t.pl <= 0) return false;
+                    if (pf === 'losing' && t.pl >= 0) return false;
+                    if (pf === 'breakeven' && Math.abs(t.pl) > 0.01) return false;
+                    if (dur === 'day' && t.close_date && t._date && t.close_date !== t._date) return false;
+                    if (dur === 'swing' && t.close_date && t._date && t.close_date === t._date) return false;
+                    if (dr.start && dr.end) {{ const td = new Date(t._date); if (td < dr.start || td > dr.end) return false; }}
+                    if (st.length) {{
+                        const tt = new Set();
+                        (t.tag||'').split(',').map(s=>s.trim()).filter(Boolean).forEach(x=>tt.add(x));
+                        (t.entry_tag||'').split(',').map(s=>s.trim()).filter(Boolean).forEach(x=>tt.add(x));
+                        (t.exit_tag||'').split(',').map(s=>s.trim()).filter(Boolean).forEach(x=>tt.add(x));
+                        if (!st.some(x => tt.has(x))) return false;
+                    }}
+                    return true;
+                }});
+            }}
+
+            function computeMetrics(trades) {{
+                const n = trades.length;
+                if (!n) return null;
+                const tp = trades.reduce((s,t) => s + t.pl, 0);
+                const w = trades.filter(t => t.pl > 0.01);
+                const l = trades.filter(t => t.pl < -0.01);
+                const wc = w.length, lc = l.length;
+                const dm = {{}};
+                trades.forEach(t => {{ const d = t._date; if (!dm[d]) dm[d] = {{p:0,c:0}}; dm[d].p += t.pl; dm[d].c++; }});
+                const dk = Object.keys(dm);
+                const dp = dk.map(d => dm[d].p);
+                const adp = dk.length ? dp.reduce((s,v)=>s+v,0)/dk.length : 0;
+                const adv = dk.length ? dk.reduce((s,d)=>s+dm[d].c,0)/dk.length : 0;
+                const sh = trades.reduce((s,t) => s + t.quantity, 0);
+                const aps = sh ? tp/sh : 0;
+                const aw = wc ? w.reduce((s,t)=>s+t.pl,0)/wc : 0;
+                const al = lc ? l.reduce((s,t)=>s+t.pl,0)/lc : 0;
+                const mn = tp/n;
+                const sd = Math.sqrt(trades.reduce((s,t) => s + Math.pow(t.pl - mn, 2), 0) / n);
+                const zs = sd > 0 ? (mn/sd)*Math.sqrt(n) : 0;
+                const pr = Math.min(100, Math.max(0, (1 - 0.5*(1 + erf(Math.abs(zs)/Math.sqrt(2))))*100));
+                const cum = []; let rn = 0;
+                trades.forEach(t => {{ rn += t.pl; cum.push(rn); }});
+                const n2 = cum.length;
+                let sx=0,sy=0,sxx=0,sxy=0;
+                cum.forEach((y,i) => {{ sx+=i; sy+=y; sxx+=i*i; sxy+=i*y; }});
+                const denom = n2*sxx - sx*sx;
+                const sl = denom ? (n2*sxy - sx*sy)/denom : 0;
+                const yh = cum.map((y,i) => sl*i + (sy-sl*sx)/n2);
+                const rs = cum.map((y,i) => Math.pow(y-yh[i],2)).reduce((s,r)=>s+r,0);
+                const se = (n2>2 && denom/n2>0) ? Math.sqrt(rs/(n2-2))/Math.sqrt(denom/n2) : 0;
+                const kr = se ? sl/se : 0;
+                const sq = sd ? (mn/sd)*Math.sqrt(n) : 0;
+                const wp = n ? (wc/n)*100 : 0, lp = n ? (lc/n)*100 : 0;
+                return {{ totalPL:tp, avgDailyPL:adp, avgDailyVolume:adv, avgPerShare:aps, avgTrade:mn, totalTrades:n, winCount:wc, winPct:wp, lossCount:lc, lossPct:lp, avgWin:aw, avgLoss:al, stdDev:sd, probRandom:pr, kRatio:kr, sqn:sq }};
+            }}
+
+            function erf(x) {{
+                const a1=0.254829592,a2=-0.284496736,a3=1.421413741,a4=-1.453152027,a5=1.061405429,p=0.3275911;
+                const s = x<0?-1:1; x=Math.abs(x);
+                const t = 1/(1+p*x);
+                return s * (1 - (((((a5*t+a4)*t+a3)*t+a2)*t+a1)*t*Math.exp(-x*x)));
+            }}
+
+            function formatCurrency(val) {{
+                return (val<0?'-$':'$') + Math.abs(val).toLocaleString(undefined,{{minimumFractionDigits:2,maximumFractionDigits:2}});
+            }}
+
+            function updateBuildCounts() {{
+                document.querySelector('#br-count-a strong').textContent = filterTrades('a').length;
+                document.querySelector('#br-count-b strong').textContent = filterTrades('b').length;
+            }}
+
+            function generateBuildReport() {{
+                const ma = computeMetrics(filterTrades('a'));
+                const mb = computeMetrics(filterTrades('b'));
+                const ct = document.getElementById('br-table-container');
+                const rd = document.getElementById('br-results');
+                if (!ma && !mb) {{ rd.style.display='block'; ct.innerHTML='<div class=\"br-no-data\">No data found for either group. Adjust your filters.</div>'; return; }}
+                rd.style.display='block';
+                const rows = [
+                    {{label:'Total Gain / Loss',key:'totalPL',fmt:'currency'}},
+                    {{label:'Average Daily Gain / Loss',key:'avgDailyPL',fmt:'currency'}},
+                    {{label:'Average Daily Volume',key:'avgDailyVolume',fmt:'number'}},
+                    {{label:'Average Per-Share Gain / Loss',key:'avgPerShare',fmt:'currency'}},
+                    {{label:'Average Trade Gain / Loss',key:'avgTrade',fmt:'currency'}},
+                    {{label:'Total Number of Trades',key:'totalTrades',fmt:'integer'}},
+                    {{label:'Winning Trades',key:'winCount',fmt:'winloss'}},
+                    {{label:'Losing Trades',key:'lossCount',fmt:'winloss'}},
+                    {{label:'Average Winning Trade',key:'avgWin',fmt:'currency'}},
+                    {{label:'Average Losing Trade',key:'avgLoss',fmt:'currency'}},
+                    {{label:'Trade P&L Standard Deviation',key:'stdDev',fmt:'currency'}},
+                    {{label:'Probability of Random Chance',key:'probRandom',fmt:'pct'}},
+                    {{label:'K-Ratio',key:'kRatio',fmt:'decimal'}},
+                    {{label:'SQN',key:'sqn',fmt:'decimal'}}
+                ];
+                let h = '<table class=\"br-table\"><thead><tr><th style=\"width:35%;\">Metric</th><th class=\"value-a\" style=\"width:32.5%;\">Group A <span class=\"br-badge br-badge-a\">A</span></th><th class=\"value-b\" style=\"width:32.5%;\">Group B <span class=\"br-badge br-badge-b\">B</span></th></tr></thead><tbody>';
+                rows.forEach(r => {{
+                    const va = ma ? ma[r.key] : null;
+                    const vb = mb ? mb[r.key] : null;
+                    const f = (v,fmt,m) => {{
+                        if (v===null||v===undefined) return '<span class=\"br-no-data\">No data found</span>';
+                        if (fmt==='currency') return formatCurrency(v);
+                        if (fmt==='number') return v.toLocaleString(undefined,{{minimumFractionDigits:2,maximumFractionDigits:2}});
+                        if (fmt==='integer') return Math.round(v).toLocaleString();
+                        if (fmt==='pct') return v.toFixed(2)+'%';
+                        if (fmt==='decimal') return v.toFixed(2);
+                        if (fmt==='winloss') return v+' ('+(r.key==='winCount'?(m.winPct||0):(m.lossPct||0)).toFixed(1)+'%)';
+                        return v;
+                    }};
+                    h += '<tr><td class=\"metric-name\">'+r.label+'</td><td class=\"value-a\">'+(ma?f(va,r.fmt,ma):'<span class=\"br-no-data\">No data found</span>')+'</td><td class=\"value-b\">'+(mb?f(vb,r.fmt,mb):'<span class=\"br-no-data\">No data found</span>')+'</td></tr>';
+                }});
+                h += '</tbody></table>';
+                ct.innerHTML = h;
+            }}
+
+            function renderBuildReport() {{
+                if (!buildReportInitialized) {{
+                    buildReportInitialized = true;
+                    buildTagOptions('a'); buildTagOptions('b'); updateBuildCounts();
+                    document.addEventListener('click', function(e) {{
+                        document.querySelectorAll('.br-tag-dropdown').forEach(dd => {{
+                            if (!dd.closest('.br-tag-wrap')) dd.classList.remove('show');
+                        }});
+                    }});
+                }}
+            }}
+
+            function resetBuildReport() {{
+                ['a','b'].forEach(g => {{
+                    document.getElementById('br-symbol-'+g).value = '';
+                    document.getElementById('br-side-'+g).value = 'all';
+                    document.getElementById('br-duration-'+g).value = 'all';
+                    document.getElementById('br-pnl-'+g).value = 'all';
+                    document.getElementById('br-datefrom-'+g).value = '';
+                    document.getElementById('br-dateto-'+g).value = '';
+                    brTags[g] = [];
+                    buildTagOptions(g); renderTagChips(g);
+                }});
+                updateBuildCounts();
+                document.getElementById('br-results').style.display = 'none';
+                document.getElementById('br-table-container').innerHTML = '';
             }}
         }} catch(e) {{
             console.error(e);
@@ -3421,16 +3856,13 @@ def generate_html_report(closed_trades, expenses_by_day):
         (function () {{
             const canvas = document.getElementById('circuit-bg');
             const ctx = canvas.getContext('2d');
-
-            // Will dynamically get the primary accent color
-            let accentRGB = '0, 212, 255'; 
-
+            let accentRGB = '0, 212, 255';
             const GRID = 30;
             let W, H, cols, rows, nodes, pulses;
 
             function hexToRgb(hex) {{
-                var result = /^#?([a-f\\d]{2})([a-f\\d]{2})([a-f\\d]{2})$/i.exec(hex);
-                return result ? `${{parseInt(result[1], 16)}}, ${{parseInt(result[2], 16)}}, ${{parseInt(result[3], 16)}}` : null;
+                const r = /^#?([a-f\\d]{{2}})([a-f\\d]{{2}})([a-f\\d]{{2}})$/i.exec(hex);
+                return r ? `${{parseInt(r[1], 16)}}, ${{parseInt(r[2], 16)}}, ${{parseInt(r[3], 16)}}` : null;
             }}
 
             function updateAccentColor() {{
@@ -3444,149 +3876,60 @@ def generate_html_report(closed_trades, expenses_by_day):
                 H = canvas.height = window.innerHeight;
                 cols = Math.ceil(W / GRID) + 1;
                 rows = Math.ceil(H / GRID) + 1;
-                buildGraph();
-            }}
-
-            function buildGraph() {{
-                nodes = [];
-                pulses = [];
-
+                nodes = []; pulses = [];
                 for (let c = 0; c < cols; c++) {{
                     for (let r = 0; r < rows; r++) {{
-                        if (Math.random() < 0.18) {{
-                            nodes.push({{ x: c * GRID, y: r * GRID, col: c, row: r }});
-                        }}
+                        if (Math.random() < 0.18) nodes.push({{ x: c * GRID, y: r * GRID, col: c, row: r }});
                     }}
                 }}
-
                 const edges = [];
                 for (let i = 0; i < nodes.length; i++) {{
                     for (let j = i + 1; j < nodes.length; j++) {{
                         const a = nodes[i], b = nodes[j];
                         const dx = Math.abs(a.col - b.col), dy = Math.abs(a.row - b.row);
-                        if ((dx === 0 && dy <= 4) || (dy === 0 && dx <= 4)) {{
-                            if (Math.random() < 0.55) {{
-                                edges.push({{ a, b, segments: buildSegments(a, b) }});
-                            }}
+                        if (((dx === 0 && dy <= 4) || (dy === 0 && dx <= 4)) && Math.random() < 0.55) {{
+                            const mid = {{ x: b.x, y: a.y }};
+                            edges.push({{ a, b, segments: [{{x1:a.x,y1:a.y,x2:mid.x,y2:mid.y}}, {{x1:mid.x,y1:mid.y,x2:b.x,y2:b.y}}] }});
                         }}
                     }}
                 }}
-
-                for (let i = 0; i < 12; i++) {{
-                    const e = edges[Math.floor(Math.random() * edges.length)];
-                    if (e) spawnPulse(e, edges);
-                }}
-
+                for (let i = 0; i < 12; i++) {{ const e = edges[Math.floor(Math.random() * edges.length)]; if (e) spawnPulse(e); }}
                 canvas._edges = edges;
             }}
 
-            function buildSegments(a, b) {{
-                const mid = {{ x: b.x, y: a.y }};
-                return [
-                    {{ x1: a.x, y1: a.y, x2: mid.x, y2: mid.y }},
-                    {{ x1: mid.x, y1: mid.y, x2: b.x, y2: b.y }}
-                ];
-            }}
-
-            function spawnPulse(edge, edges) {{
-                const totalLen = segLen(edge.segments[0]) + segLen(edge.segments[1]);
-                pulses.push({{
-                    edge,
-                    edges,
-                    t: 0,
-                    speed: 0.3 + Math.random() * 0.5,
-                    totalLen,
-                    alpha: 0.6 + Math.random() * 0.4
-                }});
-            }}
-
-            function segLen(s) {{ return Math.abs(s.x2 - s.x1) + Math.abs(s.y2 - s.y1); }}
-
-            function posAtT(segs, totalLen, t) {{
-                const dist = t;
-                const l0 = segLen(segs[0]);
-                if (dist <= l0) {{
-                    const f = dist / Math.max(l0, 0.001);
-                    return {{ x: segs[0].x1 + (segs[0].x2 - segs[0].x1) * f, y: segs[0].y1 + (segs[0].y2 - segs[0].y1) * f }};
-                }} else {{
-                    const f = (dist - l0) / Math.max(segLen(segs[1]), 0.001);
-                    return {{ x: segs[1].x1 + (segs[1].x2 - segs[1].x1) * Math.min(f, 1), y: segs[1].y1 + (segs[1].y2 - segs[1].y1) * Math.min(f, 1) }};
-                }}
+            function spawnPulse(edge) {{
+                const tl = Math.abs(edge.segments[0].x2-edge.segments[0].x1)+Math.abs(edge.segments[0].y2-edge.segments[0].y1)+Math.abs(edge.segments[1].x2-edge.segments[1].x1)+Math.abs(edge.segments[1].y2-edge.segments[1].y1);
+                pulses.push({{ edge, t: 0, speed: 0.3 + Math.random() * 0.5, totalLen: tl, alpha: 0.6 + Math.random() * 0.4 }});
             }}
 
             function draw() {{
                 updateAccentColor();
-                const C_COLOR = `rgba(${{accentRGB}},`;
-
+                const CC = `rgba(${{accentRGB}},`;
                 ctx.clearRect(0, 0, W, H);
                 const edges = canvas._edges || [];
-
                 ctx.lineWidth = 1;
                 for (const e of edges) {{
-                    ctx.strokeStyle = C_COLOR + '0.07)';
-                    ctx.beginPath();
-                    for (const s of e.segments) {{
-                        ctx.moveTo(s.x1, s.y1);
-                        ctx.lineTo(s.x2, s.y2);
-                    }}
+                    ctx.strokeStyle = CC + '0.07)'; ctx.beginPath();
+                    for (const s of e.segments) {{ ctx.moveTo(s.x1, s.y1); ctx.lineTo(s.x2, s.y2); }}
                     ctx.stroke();
                 }}
-
-                for (const n of nodes) {{
-                    ctx.beginPath();
-                    ctx.arc(n.x, n.y, 1.5, 0, Math.PI * 2);
-                    ctx.fillStyle = C_COLOR + '0.18)';
-                    ctx.fill();
-                }}
-
+                for (const n of nodes) {{ ctx.beginPath(); ctx.arc(n.x, n.y, 1.5, 0, Math.PI * 2); ctx.fillStyle = CC + '0.18)'; ctx.fill(); }}
                 const alive = [];
                 for (const p of pulses) {{
                     p.t += p.speed;
-
-                    if (p.t > p.totalLen + 12) {{
-                        if (Math.random() < 0.7) {{
-                            const e = edges[Math.floor(Math.random() * edges.length)];
-                            if (e) spawnPulse(e, edges);
-                        }}
-                        continue;
-                    }}
-
-                    alive.push(p);
-
-                    const trailLen = 24;
-                    for (let step = trailLen; step >= 0; step--) {{
-                        const tt = p.t - step;
-                        if (tt < 0 || tt > p.totalLen) continue;
-                        const pos = posAtT(p.edge.segments, p.totalLen, tt);
-                        const fade = (1 - step / trailLen) * p.alpha;
-                        ctx.beginPath();
-                        ctx.arc(pos.x, pos.y, step === 0 ? 2.5 : 1, 0, Math.PI * 2);
-                        ctx.fillStyle = C_COLOR + (fade * 0.85).toFixed(3) + ')';
-                        ctx.fill();
-                    }}
-
                     if (p.t <= p.totalLen) {{
-                        const head = posAtT(p.edge.segments, p.totalLen, p.t);
-                        ctx.beginPath();
-                        ctx.arc(head.x, head.y, 2.5, 0, Math.PI * 2);
-                        ctx.fillStyle = C_COLOR + p.alpha.toFixed(2) + ')';
-                        ctx.shadowBlur = 8;
-                        ctx.shadowColor = C_COLOR + '1)';
-                        ctx.fill();
-                        ctx.shadowBlur = 0;
+                        const hd = (ps) => {{ const d=p.t; const l0=Math.abs(ps[0].x2-ps[0].x1)+Math.abs(ps[0].y2-ps[0].y1); if(d<=l0){{const f=d/Math.max(l0,.001);return{{x:ps[0].x1+(ps[0].x2-ps[0].x1)*f,y:ps[0].y1+(ps[0].y2-ps[0].y1)*f}};}}else{{const f=(d-l0)/Math.max(Math.abs(ps[1].x2-ps[1].x1)+Math.abs(ps[1].y2-ps[1].y1),.001);return{{x:ps[1].x1+(ps[1].x2-ps[1].x1)*Math.min(f,1),y:ps[1].y1+(ps[1].y2-ps[1].y1)*Math.min(f,1)}};}}}};
+                        const h = hd(p.edge.segments);
+                        ctx.beginPath(); ctx.arc(h.x, h.y, 2.5, 0, Math.PI * 2);
+                        ctx.fillStyle = CC + p.alpha.toFixed(2) + ')';
+                        ctx.shadowBlur = 8; ctx.shadowColor = CC + '1)'; ctx.fill(); ctx.shadowBlur = 0;
+                        alive.push(p);
                     }}
                 }}
-
                 pulses = alive;
-
-                if (pulses.length < 8 && edges.length > 0) {{
-                    const e = edges[Math.floor(Math.random() * edges.length)];
-                    if (e) spawnPulse(e, edges);
-                }}
-
+                if (pulses.length < 8 && edges.length > 0) {{ const e = edges[Math.floor(Math.random() * edges.length)]; if (e) spawnPulse(e); }}
                 requestAnimationFrame(draw);
             }}
-
             window.addEventListener('resize', resize);
             resize();
             draw();
