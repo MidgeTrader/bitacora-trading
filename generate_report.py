@@ -2195,8 +2195,7 @@ def generate_html_report(closed_trades, expenses_by_day):
     </div>
 
     <script>
-        try {{
-            const annualStats = {annual_stats_json};
+        const annualStats = {annual_stats_json};
             const annualCharts = {annual_charts_json};
             const availableYears = {available_years_json};
             
@@ -3668,7 +3667,7 @@ def generate_html_report(closed_trades, expenses_by_day):
                 sel.forEach(tag => {{
                     const chip = document.createElement('span');
                     chip.className = 'br-tag-chip';
-                    chip.innerHTML = tag + ' <span class="remove" onclick="event.stopPropagation(); toggleTag(\'' + group + '\',\'' + tag + '\')">&times;</span>';
+                    chip.innerHTML = tag + ' <span class="remove" onclick="event.stopPropagation(); toggleTag(\\'' + group + '\\',\\'' + tag + '\\')">&times;</span>';
                     chips.appendChild(chip);
                 }});
             }}
@@ -3833,10 +3832,6 @@ def generate_html_report(closed_trades, expenses_by_day):
                 document.getElementById('br-results').style.display = 'none';
                 document.getElementById('br-table-container').innerHTML = '';
             }}
-        }} catch(e) {{
-            console.error(e);
-            alert('Error loading dashboard: ' + e.message);
-        }}
         // Laser scan bar effect on KPI cards
         document.addEventListener('mouseover', function (e) {{
             var card = e.target.closest('.card, .month-card');
