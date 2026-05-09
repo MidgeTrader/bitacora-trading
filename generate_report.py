@@ -1403,6 +1403,7 @@ def generate_html_report(closed_trades, expenses_by_day):
             'short_count': stats['short_count'],
             'fees': stats['fees'],
             'locates': monthly_locates,
+            'total_shares': sum(t.quantity for t in m_trades),
             'avg_win': 0, 'avg_loss': 0
         }
 
@@ -1960,7 +1961,7 @@ def generate_html_report(closed_trades, expenses_by_day):
 
         <!-- DAILY VIEW -->
         <section id="dailyView" class="view-section">
-            <div class="calendar-header"><h1>Daily Details</h1><h2 id="dailyDateTitle" style="color: var(--accent_blue);">-</h2><button onclick="saveTagsToFile()" style="background:var(--accent-primary); color:#000; border:none; padding:0.4rem 1rem; border-radius:8px; cursor:pointer; font-weight:600; font-size:0.8rem; margin-left:auto;">&#128190; Save Tags</button></div>
+            <div class="calendar-header"><h1>Daily Details</h1><h2 id="dailyDateTitle" style="color: var(--accent_blue);">-</h2></div>
             <div class="grid" id="dailyStatsGrid">
                 <div class="card"><div class="card-title">Daily P&L</div><div class="card-value" id="daily_pnl">-</div></div>
                 <div class="card"><div class="card-title">Trades</div><div class="card-value" id="daily_trades_count">-</div></div>
@@ -2614,9 +2615,7 @@ def generate_html_report(closed_trades, expenses_by_day):
                 }});
                 // Update customization trigger
                 document.getElementById('customizationTrigger').innerHTML = '<span style="font-size: 1rem;">🎨</span> ' + t('customize');
-                // Update save tags button
-                const saveBtn = document.querySelector('#dailyView button[onclick="saveTagsToFile()"]');
-                if (saveBtn) saveBtn.innerHTML = '&#128190; ' + t('saveTags');
+
                 // Update Performance subtitle
                 const perfEl = document.querySelector('.sidebar p');
                 if (perfEl) perfEl.innerText = t('performance');
@@ -3048,7 +3047,7 @@ def generate_html_report(closed_trades, expenses_by_day):
                 }} catch(e) {{}}
 
                 // Standard presets
-                const stdPresets = ['Momentum', 'Breakout', 'Reversal', 'News', 'Scalp', 'Swing', 'Pullback', 'Trend Follow', 'Fade', 'Gap', 'VWAP', 'Support', 'Resistance'];
+                const stdPresets = ['Momentum', 'Reversal', 'Scalp', 'Swing', 'Pullback', 'Trend Follow', 'Gap', 'VWAP', 'Short 2 std', 'Short 1 std', '- 1 std', 'Long Vwap', 'Vwap bounce', 'Vwap resistence', 'Target', 'Exit BE', 'Exit max day', '10%', 'stop lost', 'Stop loss', 'BO max of day'];
 
                 ['entryTagPresets', 'exitTagPresets'].forEach(containerId => {{
                     const container = document.getElementById(containerId);
@@ -3121,7 +3120,7 @@ def generate_html_report(closed_trades, expenses_by_day):
                     const extractTags = (str) => str ? str.split(',').map(s => s.trim()).filter(Boolean) : [];
                     const allEntry = extractTags(entryTag);
                     const allExit = extractTags(exitTag);
-                    const stdPresets = ['Momentum', 'Breakout', 'Reversal', 'News', 'Scalp', 'Swing', 'Pullback', 'Trend Follow', 'Fade', 'Gap', 'VWAP', 'Support', 'Resistance'];
+                    const stdPresets = ['Momentum', 'Reversal', 'Scalp', 'Swing', 'Pullback', 'Trend Follow', 'Gap', 'VWAP', 'Short 2 std', 'Short 1 std', '- 1 std', 'Long Vwap', 'Vwap bounce', 'Vwap resistence', 'Target', 'Exit BE', 'Exit max day', '10%', 'stop lost', 'Stop loss', 'BO max of day'];
                     const isCustom = t => !stdPresets.includes(t);
 
                     const saveCustom = (key, tags) => {{
@@ -3137,6 +3136,15 @@ def generate_html_report(closed_trades, expenses_by_day):
 
                 // Update localStorage backup
                 try {{ localStorage.setItem('tradingTags', JSON.stringify(dailyTags)); }} catch(e) {{}}
+
+                // Auto-save to server silently (no download popup)
+                if (window.location.protocol === 'http:' || window.location.protocol === 'https:') {{
+                    fetch('/save-tags', {{
+                        method: 'POST',
+                        headers: {{ 'Content-Type': 'application/json' }},
+                        body: JSON.stringify(dailyTags)
+                    }}).catch(() => {{}});
+                }}
 
                 // Recompute tag metrics from live data
                 refreshTagMetrics();
@@ -3334,12 +3342,8 @@ def generate_html_report(closed_trades, expenses_by_day):
                 html += mkCard('Win Rate (W:1)', winValuesRatio);
                 
                 if (adv) {{
-                    const avgWin = adv.avg_win || 0;
-                    const avgLoss = Math.abs(adv.avg_loss || 0);
-                    const wlDollarRatio = avgLoss > 0 ? (avgWin / avgLoss) : 0;
-                    const wlCls = wlDollarRatio >= 1 ? 'positive' : 'negative';
-                    const wlVal = '$' + wlDollarRatio.toFixed(2) + ':1';
-                    html += mkCard('Avg Win / Loss', wlVal, wlCls);
+                    const shares = basicStats.total_shares || 0;
+                    html += mkCard('Shares Traded', shares.toLocaleString(), shares > 0 ? '' : '');
                 }}
                 
                 const winPct = totalTrades > 0 ? (winCount / totalTrades * 100) : 0.0;
