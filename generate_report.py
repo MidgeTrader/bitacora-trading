@@ -1233,6 +1233,7 @@ def generate_html_report(closed_trades, expenses_by_day):
             'pnl': sum(t.net_pl for t in trades),
             'count': len(trades),
             'fees': total_fees,
+            'locates': 0.0,
             'trades': [t.to_dict() for t in trades],
             'stats': {
                 'all': stats_all,
@@ -1242,16 +1243,16 @@ def generate_html_report(closed_trades, expenses_by_day):
             }
 
         }
-    
+
     # Merge Expenses into Daily Stats
     for d_key, cost in expenses_by_day.items():
         if d_key not in daily_stats:
             daily_stats[d_key] = {
-                'pnl': 0.0, 'count': 0, 'fees': 0.0, 'trades': [],
+                'pnl': 0.0, 'count': 0, 'fees': 0.0, 'locates': 0.0, 'trades': [],
                 'stats': {'all': {}, 'won': {}, 'lost': {}, 'advanced': {}} # Empty stats
             }
-        
-        daily_stats[d_key]['fees'] += cost
+
+        daily_stats[d_key]['locates'] += cost
         # Excluded from P&L per user request to avoid distorting charts
         # daily_stats[d_key]['pnl'] -= cost 
 
@@ -1393,6 +1394,7 @@ def generate_html_report(closed_trades, expenses_by_day):
         
         # Context Stats
         stats = calculate_kpis(m_trades)
+        monthly_locates = sum(cost for d, cost in expenses_by_day.items() if d.startswith(m_key))
         monthly_context_stats[m_key] = {
             'win_rate': stats['win_rate'],
             'profit_factor': stats['profit_factor'],
@@ -1400,7 +1402,8 @@ def generate_html_report(closed_trades, expenses_by_day):
             'long_count': stats['long_count'],
             'short_count': stats['short_count'],
             'fees': stats['fees'],
-            'avg_win': 0, 'avg_loss': 0 
+            'locates': monthly_locates,
+            'avg_win': 0, 'avg_loss': 0
         }
 
         # Gain Loss Stats
@@ -1976,7 +1979,7 @@ def generate_html_report(closed_trades, expenses_by_day):
                              <tr> <td style="text-align: left;">Trades</td> <td id="d_gl_count_won">-</td> <td id="d_gl_count_lost">-</td> </tr>
                              
                              <tr style="border-top: 2px solid var(--border-color);"> <td style="text-align: left; font-weight: 700;">Ratios</td> <td id="d_gl_ratio_wl">-</td> <td id="d_gl_ratio_gp">-</td> </tr>
-                             <tr> <td style="text-align: left;">Gastos</td> <td id="d_gl_fees" class="negative">-</td> <td>-</td> </tr>
+                             <tr> <td style="text-align: left;">Gastos/Locates</td> <td id="d_gl_fees" class="negative">-</td> <td id="d_gl_locates" class="negative">-</td> </tr>
                              <tr> <td style="text-align: left;">Max Drawdown</td> <td>-</td> <td id="d_gl_max_dd" class="negative">-</td> </tr>
                              <tr> <td style="text-align: left;">Max Streak</td> <td id="d_gl_streak_win">-</td> <td id="d_gl_streak_loss">-</td> </tr>
                              <tr style="border-top: 2px solid var(--border-color);"> <td style="text-align: left; font-weight: 700;">Trade Notes</td> <td colspan="2" id="d_gl_notes" style="text-align:left; color:var(--text-secondary); font-size:0.8rem;">-</td> </tr>
@@ -2986,6 +2989,8 @@ def generate_html_report(closed_trades, expenses_by_day):
                         document.getElementById('d_gl_ratio_gp').innerText = t('gpRatio') + ': ' + gpVal.toFixed(2) + ':1';
                         document.getElementById('d_gl_ratio_gp').className = gpVal >= 1 ? 'positive' : 'negative';
                         document.getElementById('d_gl_fees').innerText = '$'+data.fees.toLocaleString(undefined, {{minimumFractionDigits: 2, maximumFractionDigits: 2}});
+                        const locs = data.locates || 0;
+                        document.getElementById('d_gl_locates').innerText = locs > 0 ? '$'+locs.toLocaleString(undefined, {{minimumFractionDigits: 2, maximumFractionDigits: 2}}) : '-';
                         document.getElementById('d_gl_max_dd').innerText = '$'+adv.max_dd.toLocaleString(undefined, {{minimumFractionDigits: 2, maximumFractionDigits: 2}});
                         document.getElementById('d_gl_streak_win').innerHTML = `<div class="positive">${{adv.max_consec_wins}}</div>`;
                         document.getElementById('d_gl_streak_loss').innerHTML = `<div class="negative">${{adv.max_consec_losses}}</div>`;
